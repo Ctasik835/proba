@@ -354,7 +354,13 @@ alt=""/></a><script>(function(d,s){d.getElementById("licntA113").src=
                 <h4>🗺️ Как добраться</h4>
                 <p>${station.route}</p>
                 
-                <button class="route-btn" onclick="window.open('https://maps.google.com/?q=${station.lat},${station.lon}', '_blank')">🧭 Открыть маршрут в Google Maps</button>
+                <button class="route-btn" onclick="window.open('https://maps.google.com/?q=${station.lat},${station.lon}', '_blank')">
+                    🧭 Открыть маршрут в Google Maps
+                </button>
+            `;
+            
+            sidebar.classList.add('open');
+        }
         
         function closeSidebar() {
             document.getElementById('sidebar').classList.remove('open');
@@ -454,4 +460,3 @@ alt=""/></a><script>(function(d,s){d.getElementById("licntA113").src=
     </script>
 </body>
 </html>
-
