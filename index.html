@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Интерактивная карта заброшенных МГЭС</title>
+    
+    <!-- Подключение Leaflet.js (бесплатная карта) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 1300px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            position: relative;
+        }
+        
+        h1 {
+            color: #333;
+            margin: 0 0 10px 0;
+        }
+        
+        /* Описание под заголовком */
+        .description {
+            font-size: 16px;
+            line-height: 1.5;
+            color: #555;
+            margin: 15px 0 10px 0;
+            background: #f0f7ff;
+            padding: 12px 15px;
+            border-radius: 8px;
+            border-left: 4px solid #9e2a2a;
+        }
+        
+        /* Виджет счётчика сверху */
+        .counter-top {
+            margin: 0 0 15px 0;
+            padding: 0;
+        }
+        
+        /* Статистика (автоматическая) */
+        .stats {
+            display: flex;
+            gap: 25px;
+            flex-wrap: wrap;
+            background: #e8f4f8;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin: 15px 0;
+            font-size: 16px;
+        }
+        
+        .stats span {
+            font-weight: normal;
+        }
+        
+        .stats strong {
+            font-size: 20px;
+            color: #9e2a2a;
+        }
+        
+        /* Поиск */
+        .search-bar {
+            margin: 15px 0;
+        }
+        
+        .search-box {
+            width: 100%;
+            max-width: 400px;
+        }
+        
+        .search-box input {
+            width: 100%;
+            padding: 10px 15px;
+            font-size: 15px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+        
+        .search-box input:focus {
+            border-color: #9e2a2a;
+        }
+        
+        /* Контейнер карты */
+        .map-container {
+            margin: 0 0 15px 0;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        #map {
+            height: 550px;
+            width: 100%;
+        }
+        
+        /* Боковая панель с подробностями */
+        .sidebar {
+            position: fixed;
+            right: -400px;
+            top: 0;
+            width: 400px;
+            height: 100%;
+            background: white;
+            box-shadow: -2px 0 15px rgba(0,0,0,0.2);
+            transition: right 0.3s ease;
+            z-index: 1000;
+            overflow-y: auto;
+            padding: 25px;
+            font-size: 14px;
+        }
+        
+        .sidebar.open {
+            right: 0;
+        }
+        
+        .sidebar h3 {
+            margin-top: 0;
+            color: #9e2a2a;
+            border-bottom: 2px solid #9e2a2a;
+            padding-bottom: 10px;
+        }
+        
+        .sidebar h4 {
+            margin: 15px 0 5px 0;
+            color: #555;
+        }
+        
+        .sidebar p {
+            margin: 5px 0;
+            line-height: 1.5;
+        }
+        
+        .close-sidebar {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            float: right;
+            color: #999;
+        }
+        
+        .close-sidebar:hover {
+            color: #333;
+        }
+        
+        .route-btn {
+            background: #9e2a2a;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        
+        .route-btn:hover {
+            background: #7a1f1f;
+        }
+        
+        /* Футер */
+        .footer {
+            color: #666;
+            font-size: 14px;
+            border-top: 1px solid #eee;
+            padding-top: 15px;
+            margin-top: 15px;
+        }
+        
+        /* Адаптивность */
+        @media (max-width: 768px) {
+            .container { padding: 15px; }
+            #map { height: 400px; }
+            h1 { font-size: 20px; }
+            .stats { gap: 12px; font-size: 14px; }
+            .sidebar { width: 100%; right: -100%; }
+        }
+        
+        /* Подсказка */
+        .hint-text {
+            font-size: 13px;
+            color: #888;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🗺️ Интерактивная карта: заброшенные МГЭС</h1>
+        
+        <!-- Фраза-описание -->
+        <div class="description">
+            📍 Это интерактивная карта заброшенных МГЭС, на которой можно увидеть их местоположение, 
+            историю, техническое описание и краткое описание маршрута как до них можно добраться.
+        </div>
+        
+        <!-- ВИДЖЕТ LIVENTERNET (под описанием, как просили) -->
+        <div class="counter-top">
+           <!--LiveInternet counter--><a href="https://www.liveinternet.ru/click"
+target="_blank"><img id="licntA113" width="88" height="120" style="border:0" 
+title="LiveInternet: показано количество просмотров и посетителей"
+src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAEALAAAAAABAAEAAAIBTAA7"
+alt=""/></a><script>(function(d,s){d.getElementById("licntA113").src=
+"https://counter.yadro.ru/hit?t28.9;r"+escape(d.referrer)+
+((typeof(s)=="undefined")?"":";s"+s.width+"*"+s.height+"*"+
+(s.colorDepth?s.colorDepth:s.pixelDepth))+";u"+escape(d.URL)+
+";h"+escape(d.title.substring(0,150))+";"+Math.random()})
+(document,screen)</script><!--/LiveInternet-->
+        </div>
+        
+        <!-- АВТОМАТИЧЕСКАЯ СТАТИСТИКА -->
+        <div class="stats" id="statsPanel">
+            <span>🏭 Всего МГЭС на карте: <strong id="totalCount">0</strong></span>
+            <span>🏚️ Заброшенные: <strong id="abandonedCount">0</strong></span>
+        </div>
+        
+        <!-- Поиск -->
+        <div class="search-bar">
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="🔍 Поиск по названию или региону...">
+            </div>
+        </div>
+        
+        <!-- Контейнер для карты -->
+        <div class="map-container">
+            <div id="map"></div>
+        </div>
+        
+        <!-- Пояснительный текст -->
+        <p>⚡ Нажмите на маркер на карте, чтобы увидеть подробную информацию об МГЭС.</p>
+        <p class="hint-text">🗺️ Данные карты: OpenStreetMap • Объекты добавлены на основе архивных и краеведческих источников</p>
+        
+        <!-- Футер с датой -->
+        <div class="footer">
+            <span>© Карта в разработке • </span>
+            <span>Обновлено: <span id="lastUpdate"></span></span>
+        </div>
+    </div>
+    
+    <!-- БОКОВАЯ ПАНЕЛЬ (подробности при клике) -->
+    <div id="sidebar" class="sidebar">
+        <button class="close-sidebar" onclick="closeSidebar()">✖</button>
+        <h3 id="sidebarTitle">Название МГЭС</h3>
+        <div id="sidebarContent"></div>
+    </div>
+
+    <script>
+        // ==================== ДАННЫЕ О МГЭС ====================
+        // Все ГЭС на карте — заброшенные
+        const mgesData = [
+            {
+                id: 1,
+                name: "Сосновская ГЭС",
+                oldName: "Петяярвская ГЭС",
+                region: "Ленинградская область, Приозерский район",
+                lat: 60.628402,
+                lon: 30.068002,
+                status: "заброшена",
+                yearBuilt: 1928,
+                yearClosed: 1970,
+                power: "175 кВт",
+                history: "Сосновская ГЭС, изначально известная как Петяярвская ГЭС, была построена в 1928 году на реке Волчьей (фин. Saijanjoki) у деревни Петяярви (ныне пос. Петровское). На момент постройки она считалась крупнейшей частной гидроэлектростанцией в довоенной Финляндии. Владельцем был Леонард Сяяксъярви, а рядом находилась мельница, принадлежавшая, предположительно, его родственнику Арттури Сяяксъярви.\n\nСтанция обеспечивала электричеством несколько окрестных поселений: Саккола (ныне Громово), Петяярви, а также Кивиниеми (Лосево) и Валкъярви (Мичуринское). Деревня Петяярви стала одной из первых в волости, получивших электричество.\n\nПосле Советско-финских войн территория отошла к СССР. В советское время станция продолжила работу и на картах значилась уже как Сосновская ГЭС. Она функционировала вплоть до 1970-х годов, когда большинство малых ГЭС региона были остановлены после развития единой энергосистемы и ввода мощностей ЛАЭС. В наши дни станция не действует, но ее сооружения сохранились.",
+                techDesc: "Комплекс ГЭС включал в себя:\n\n• Плотина и водосброс: Бетонная плотина, регулирующая сток реки Волчьей. Специалисты отмечают, что шлюз и механизм сброса воды находятся в хорошем состоянии.\n\n• Здание ГЭС: Небольшое здание машинного зала, сложенное из камня. До наших дней оно дошло в виде руин, но сохранило оригинальные черты. Рядом находится деревянный дом более поздней постройки.\n\n• Мост-плотина: Сама плотина выполняет также функцию пешеходного (и отчасти автомобильного) моста через реку Волчью, являясь частью местной инфраструктуры и туристического маршрута.\n\n• Высота подпора воды составляла 6 метров, а мощность агрегата достигала 175 кВт.",
+                route: "Следуйте по трассе «Сортавала» (А-121) в сторону Приозерска. В районе поселка Петровское (ориентир — Никольская церковь) нужно повернуть налево, проехать под железнодорожным мостом и двигаться в сторону реки Волчьей. Плотина и остатки ГЭС находятся в конце экологической тропы."
+            },
+            {
+                id: 2,
+                name: "Рощинская ГЭС",
+                oldName: "Райволовская ГЭС",
+                region: "Ленинградская область, Выборгский район, посёлок Рощино",
+                lat: 60.258525,
+                lon: 29.603054,
+                status: "заброшена",
+                yearBuilt: 1935,
+                yearClosed: 1962,
+                power: "Данных нет",
+                history: "Рощинская ГЭС была построена в 1935 году, когда эти места ещё принадлежали Финляндии и поселок назывался Райвола. Она была нужна для обеспечения энергией Райволы, близлежащих поселков и даже Териоки (Зеленогорска). В 1962 году станция пришла в негодность и её решили забросить, ведь эти места уже были электрифицированы и ГЭС по факту уже была не нужна.\n\nСейчас задумываются над тем, чтобы её восстановить. Но пока этого не произошло, ГЭС выполняет свои функции в качестве плотины и сдерживает воды Рощинского озера, которое по факту является водохранилищем.",
+                techDesc: "ГЭС представляет собой сооружение, пропускающее воду каскадом, образуя несколько небольших водопадов. Сохранилась часть механизма затвора на пешеходном мостике. Здание машинного зала заброшено, изрисовано вандалами, внутреннее оборудование отсутствует.\n\nОснову ГЭС составляла плотина с подводным и отводящим каналами, водоприёмником, а также здания самой электростанции.\n\nНекоторые особенности конструкции:\n\n1. Вода к турбинам подводилась по отдельному каналу.\n2. Водосброс реки Рощинки сделан трёхступенчатым, общая высота водосброса — около 10 м.\n\nЗдание ГЭС, где раньше располагались генераторы, заброшено. Плотина фактически используется только для поддержания уровня воды в Рощинском озере — искусственном водохранилище, образованном плотиной.",
+                route: "Объект находится в центре посёлка Рощино, рядом с парковой зоной. От ж/д станции можно дойти пешком за 20-30 минут. На автомобиле также возможно подъехать, но с парковкой могут быть сложности. Чтобы попасть к ГЭС, нужно свернуть с главной дороги, дойти до моста и спуститься по лестнице сбоку от него."
+            }
+        ];
+        
+        // ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
+        let map;
+        let currentMarkers = [];
+        let currentSearchTerm = "";
+        
+        // ==================== ИНИЦИАЛИЗАЦИЯ КАРТЫ ====================
+        function initMap() {
+            // Центр карты — Ленинградская область (между двумя ГЭС)
+            map = L.map('map').setView([60.4, 29.8], 9);
+            
+            // Добавляем слой (OpenStreetMap через бесплатный сервер CartoDB)
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 19
+            }).addTo(map);
+        }
+        
+        // ==================== ОБНОВЛЕНИЕ СЧЁТЧИКА СТАТИСТИКИ ====================
+        function updateStats() {
+            const total = mgesData.length;
+            const abandoned = mgesData.filter(s => s.status === "заброшена").length;
+            
+            document.getElementById('totalCount').textContent = total;
+            document.getElementById('abandonedCount').textContent = abandoned;
+        }
+        
+        // ==================== ПОКАЗ ПОДРОБНОСТЕЙ В БОКОВОЙ ПАНЕЛИ ====================
+        function showDetails(id) {
+            const station = mgesData.find(s => s.id === id);
+            if (!station) return;
+            
+            const sidebar = document.getElementById('sidebar');
+            document.getElementById('sidebarTitle').innerHTML = station.name;
+            
+            // Формируем содержимое с корректными переносами строк
+            const historyHtml = station.history.replace(/\n/g, '<br>');
+            const techHtml = station.techDesc.replace(/\n/g, '<br>');
+            
+            document.getElementById('sidebarContent').innerHTML = `
+                <p><strong>📍 Регион:</strong> ${station.region}</p>
+                <p><strong>📛 Прежнее название:</strong> ${station.oldName || 'нет данных'}</p>
+                <p><strong>📊 Статус:</strong> 🏚️ Заброшена</p>
+                <p><strong>🏗️ Год постройки:</strong> ${station.yearBuilt}</p>
+                <p><strong>⛔ Прекратила работу:</strong> ${station.yearClosed ? station.yearClosed + ' год' : 'нет точных данных'}</p>
+                <p><strong>⚡ Мощность:</strong> ${station.power}</p>
+                
+                <h4>📜 История</h4>
+                <p>${historyHtml}</p>
+                
+                <h4>🔧 Техническое описание</h4>
+                <p>${techHtml}</p>
+                
+                <h4>🗺️ Как добраться</h4>
+                <p>${station.route}</p>
+                
+                <button class="route-btn" onclick="window.open('https://maps.google.com/?q=${station.lat},${station.lon}', '_blank')">
+                    🧭 Открыть маршрут в Google Maps
+                </button>
+            `;
+            
+            sidebar.classList.add('open');
+        }
+        
+        function closeSidebar() {
+            document.getElementById('sidebar').classList.remove('open');
+        }
+        
+        // Закрытие по Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeSidebar();
+        });
+        
+        // ==================== ОТРИСОВКА МАРКЕРОВ НА КАРТЕ ====================
+        function renderMarkers() {
+            // Удаляем старые маркеры
+            currentMarkers.forEach(marker => map.removeLayer(marker));
+            currentMarkers = [];
+            
+            // Фильтруем данные по поиску
+            let filtered = [...mgesData];
+            
+            // Поиск по названию или региону
+            if (currentSearchTerm.trim() !== "") {
+                const term = currentSearchTerm.toLowerCase().trim();
+                filtered = filtered.filter(s => 
+                    s.name.toLowerCase().includes(term) || 
+                    (s.region && s.region.toLowerCase().includes(term)) ||
+                    (s.oldName && s.oldName.toLowerCase().includes(term))
+                );
+            }
+            
+            // Добавляем маркеры
+            filtered.forEach(station => {
+                // Кастомная иконка для заброшенной ГЭС
+                const customIcon = L.divIcon({
+                    html: `<div style="background-color: #9e2a2a; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.3); font-size: 14px;">🏚️</div>`,
+                    iconSize: [28, 28],
+                    className: 'custom-marker'
+                });
+                
+                const marker = L.marker([station.lat, station.lon], { icon: customIcon }).addTo(map);
+                
+                // Всплывающее окно при клике
+                marker.bindPopup(`
+                    <b>${station.name}</b><br>
+                    📍 ${station.region || 'Ленинградская область'}<br>
+                    🏚️ Заброшена (${station.yearBuilt}—${station.yearClosed || '1970'})<br>
+                    <button onclick="showDetails(${station.id})" style="margin-top:8px; padding:5px 12px; background:#9e2a2a; color:white; border:none; border-radius:4px; cursor:pointer;">📖 Подробнее</button>
+                `);
+                
+                // Также по клику на маркер можно сразу открывать боковую панель
+                marker.on('click', () => {
+                    showDetails(station.id);
+                });
+                
+                currentMarkers.push(marker);
+            });
+            
+            // Если ничего не найдено — показываем сообщение (опционально)
+            if (filtered.length === 0 && currentSearchTerm !== "") {
+                // Можно добавить всплывающее уведомление, но для простоты оставим так
+                console.log("Ничего не найдено по запросу: " + currentSearchTerm);
+            }
+        }
+        
+        // ==================== ОБНОВЛЕНИЕ ПРИ ИЗМЕНЕНИИ ПОИСКА ====================
+        function applySearch() {
+            renderMarkers();
+        }
+        
+        // ==================== НАСТРОЙКА СОБЫТИЙ ====================
+        function setupEventListeners() {
+            // Поиск
+            const searchInput = document.getElementById('searchInput');
+            searchInput.addEventListener('input', (e) => {
+                currentSearchTerm = e.target.value;
+                applySearch();
+            });
+        }
+        
+        // ==================== ЗАПУСК ====================
+        document.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            updateStats();
+            setupEventListeners();
+            // Небольшая задержка для корректной отрисовки маркеров после инициализации карты
+            setTimeout(() => {
+                renderMarkers();
+            }, 100);
+        });
+        
+        // Дата в футере
+        document.getElementById('lastUpdate').textContent = 
+            new Date().toLocaleString('ru-RU', {
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric'
+            });
+    </script>
+</body>
+</html>
+
