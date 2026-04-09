@@ -354,10 +354,7 @@ alt=""/></a><script>(function(d,s){d.getElementById("licntA113").src=
                 <h4>🗺️ Как добраться</h4>
                 <p>${station.route}</p>
                 
-                <button class="route-btn" onclick="window.open('https://yandex.ru/maps/?pt=${station.lon},${station.lat}&z=17&l=map', '_blank')">🧭 Открыть маршрут в Яндекс.Картах</button>
-            
-            sidebar.classList.add('open');
-        }
+                <button class="route-btn" onclick="window.open('https://maps.google.com/?q=${station.lat},${station.lon}', '_blank')">🧭 Открыть маршрут в Google Maps</button>
         
         function closeSidebar() {
             document.getElementById('sidebar').classList.remove('open');
