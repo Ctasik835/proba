@@ -249,17 +249,16 @@
         var currentMarkers = [];
         var currentSearchTerm = "";
         //инициализация карты
-                function initMap() {
-            map = L.map('map', {
-                attributionControl: false
-            }).setView([59.5, 30.5], 8);
-            
-            L.tileLayer('https://core-renderer-tiles.maps.yandex.net/tiles?l=map&v=22.10.30-0&x={x}&y={y}&z={z}&scale=1&lang=ru_RU', {
-                attribution: '&copy; <a href="https://yandex.ru/maps">Яндекс.Карты</a>',
-                maxZoom: 19,
-                subdomains: ['01', '02', '03', '04']
-            }).addTo(map);
-        }
+               function initMap() {
+    map = L.map('map', {
+        attributionControl: false
+    }).setView([59.5, 30.5], 8);
+    
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        maxZoom: 19
+    }).addTo(map);
+}
         
         // Обновление счётчиков
         function updateStats() {
