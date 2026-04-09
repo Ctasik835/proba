@@ -251,7 +251,14 @@
         
         // Инициализация карты с Яндекс.Картами (подложка)
         function initMap() {
-            map = L.map('map').setView([59.5, 30.5], 8);
+           map = L.map('map', {
+    attributionControl: false
+}).setView([59.5, 30.5], 8);
+
+// Добавить свою attribution
+L.control.attribution({Даня молодец
+    prefix: false  // Убирает "Leaflet"
+}).addTo(map);
             
             // Яндекс.Карты - схема
             L.tileLayer('https://core-renderer-tiles.maps.yandex.net/tiles?l=map&v=22.10.30-0&x={x}&y={y}&z={z}&scale=1&lang=ru_RU', {
