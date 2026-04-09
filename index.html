@@ -3,39 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Интерактивная карта заброшенных МГЭС Ленинградской области</title>
+    <title>Интерактивная карта заброшенных МГЭС</title>
     
-    <!-- Подключение Leaflet.js -->
+    <!-- Подключение Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <style>
-        * {
-            box-sizing: border-box;
-        }
-        
+        * { box-sizing: border-box; }
         body {
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 20px;
             background-color: #f5f5f5;
         }
-        
         .container {
             max-width: 1300px;
             margin: 0 auto;
             background-color: white;
             padding: 20px;
             border-radius: 8px;
-            position: relative;
         }
-        
-        h1 {
-            color: #333;
-            margin: 0 0 10px 0;
-            font-size: 24px;
-        }
-        
+        h1 { color: #333; margin: 0 0 10px 0; font-size: 24px; }
         .description {
             font-size: 16px;
             line-height: 1.5;
@@ -46,12 +34,7 @@
             border-radius: 8px;
             border-left: 4px solid #9e2a2a;
         }
-        
-        .counter-top {
-            margin: 0 0 15px 0;
-            padding: 0;
-        }
-        
+        .counter-top { margin: 0 0 15px 0; }
         .stats {
             display: flex;
             gap: 25px;
@@ -60,53 +43,24 @@
             padding: 12px 20px;
             border-radius: 8px;
             margin: 15px 0;
-            font-size: 16px;
         }
-        
-        .stats span {
-            font-weight: normal;
-        }
-        
-        .stats strong {
-            font-size: 20px;
-            color: #9e2a2a;
-        }
-        
-        .search-bar {
-            margin: 15px 0;
-        }
-        
-        .search-box {
-            width: 100%;
-            max-width: 400px;
-        }
-        
+        .stats strong { font-size: 20px; color: #9e2a2a; }
+        .search-bar { margin: 15px 0; }
         .search-box input {
             width: 100%;
+            max-width: 400px;
             padding: 10px 15px;
             font-size: 15px;
             border: 1px solid #ddd;
             border-radius: 6px;
-            outline: none;
-            transition: border-color 0.3s;
         }
-        
-        .search-box input:focus {
-            border-color: #9e2a2a;
-        }
-        
         .map-container {
             margin: 0 0 15px 0;
             border: 1px solid #ddd;
             border-radius: 8px;
             overflow: hidden;
         }
-        
-        #map {
-            height: 550px;
-            width: 100%;
-        }
-        
+        #map { height: 550px; width: 100%; }
         .sidebar {
             position: fixed;
             right: -450px;
@@ -119,58 +73,16 @@
             z-index: 1000;
             overflow-y: auto;
             padding: 25px;
-            font-size: 14px;
         }
-        
-        .sidebar.open {
-            right: 0;
-        }
-        
-        .sidebar h3 {
-            margin-top: 0;
-            color: #9e2a2a;
-            border-bottom: 2px solid #9e2a2a;
-            padding-bottom: 10px;
-        }
-        
-        .sidebar h4 {
-            margin: 15px 0 5px 0;
-            color: #555;
-        }
-        
-        .sidebar p {
-            margin: 5px 0;
-            line-height: 1.5;
-        }
-        
-        .sidebar .gallery {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 10px;
-        }
-        
-        .sidebar .gallery img {
-            width: 100%;
-            border-radius: 6px;
-            cursor: pointer;
-            object-fit: cover;
-            max-height: 200px;
-        }
-        
+        .sidebar.open { right: 0; }
+        .sidebar h3 { color: #9e2a2a; border-bottom: 2px solid #9e2a2a; padding-bottom: 10px; }
         .close-sidebar {
             background: none;
             border: none;
             font-size: 24px;
             cursor: pointer;
             float: right;
-            color: #999;
         }
-        
-        .close-sidebar:hover {
-            color: #333;
-        }
-        
         .route-btn {
             background: #9e2a2a;
             color: white;
@@ -179,14 +91,9 @@
             border-radius: 6px;
             cursor: pointer;
             margin-top: 10px;
-            font-size: 14px;
             width: 100%;
         }
-        
-        .route-btn:hover {
-            background: #7a1f1f;
-        }
-        
+        .route-btn:hover { background: #7a1f1f; }
         .footer {
             color: #666;
             font-size: 14px;
@@ -194,55 +101,9 @@
             padding-top: 15px;
             margin-top: 15px;
         }
-        
         @media (max-width: 768px) {
-            .container { padding: 15px; }
-            #map { height: 400px; }
-            h1 { font-size: 20px; }
-            .stats { gap: 12px; font-size: 14px; }
             .sidebar { width: 100%; right: -100%; }
-        }
-        
-        .hint-text {
-            font-size: 13px;
-            color: #888;
-            margin-top: 8px;
-        }
-        
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 2000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.9);
-        }
-        
-        .modal-content {
-            margin: auto;
-            display: block;
-            max-width: 90%;
-            max-height: 90%;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-        }
-        
-        .close-modal {
-            position: absolute;
-            top: 15px;
-            right: 35px;
-            color: #f1f1f1;
-            font-size: 40px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        
-        .close-modal:hover {
-            color: #bbb;
+            #map { height: 400px; }
         }
     </style>
 </head>
@@ -252,7 +113,7 @@
         
         <div class="description">
             📍 Это интерактивная карта заброшенных МГЭС, на которой можно увидеть их местоположение, 
-            историю, техническое описание, фотографии и краткое описание маршрута как до них можно добраться.
+            историю, техническое описание и маршрут как до них можно добраться.
         </div>
         
         <div class="counter-top">
@@ -272,7 +133,7 @@
         </div>
         
         <div class="stats" id="statsPanel">
-            <span>🏭 Всего МГЭС на карте: <strong id="totalCount">0</strong></span>
+            <span>🏭 Всего МГЭС: <strong id="totalCount">0</strong></span>
             <span>🏚️ Заброшенные: <strong id="abandonedCount">0</strong></span>
             <span>🏠 Отреставрированные: <strong id="restoredCount">0</strong></span>
         </div>
@@ -287,8 +148,7 @@
             <div id="map"></div>
         </div>
         
-        <p>⚡ Нажмите на маркер на карте, чтобы увидеть подробную информацию об МГЭС.</p>
-        <p class="hint-text">🗺️ Данные карты: OpenStreetMap • Объекты добавлены на основе архивных и краеведческих источников</p>
+        <p>⚡ Нажмите на маркер на карте, чтобы увидеть подробную информацию.</p>
         
         <div class="footer">
             <span>© Карта в разработке • </span>
@@ -301,14 +161,13 @@
         <h3 id="sidebarTitle">Название МГЭС</h3>
         <div id="sidebarContent"></div>
     </div>
-    
-    <div id="imageModal" class="modal">
-        <span class="close-modal" onclick="closeModal()">&times;</span>
-        <img class="modal-content" id="modalImage">
-    </div>
 
+    <!-- Подключение Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
     <script>
-        const mgesData = [
+        // ДАННЫЕ О ГЭС
+        var mgesData = [
             {
                 id: 1,
                 name: "Сосновская ГЭС",
@@ -322,8 +181,7 @@
                 power: "175 кВт",
                 history: "Сосновская ГЭС, изначально известная как Петяярвская ГЭС, была построена в 1928 году на реке Волчьей у деревни Петяярви (ныне пос. Петровское). На момент постройки она считалась крупнейшей частной гидроэлектростанцией в довоенной Финляндии.\n\nСтанция обеспечивала электричеством несколько окрестных поселений: Саккола (Громово), Петяярви, Кивиниеми (Лосево) и Валкъярви (Мичуринское).\n\nПосле Советско-финских войн территория отошла к СССР. Станция функционировала до 1970-х годов, когда была остановлена после развития единой энергосистемы и ввода ЛАЭС.",
                 techDesc: "Комплекс ГЭС включал бетонную плотину, здание машинного зала из камня (сейчас руины), мост-плотину. Высота подпора воды — 6 метров, мощность — 175 кВт.",
-                route: "По трассе «Сортавала» (А-121) до поселка Петровское. Поворот налево у Никольской церкви, под железнодорожным мостом, далее к реке Волчьей.",
-                images: []
+                route: "По трассе «Сортавала» (А-121) до поселка Петровское. Поворот налево у Никольской церкви, под железнодорожным мостом, далее к реке Волчьей."
             },
             {
                 id: 2,
@@ -338,8 +196,7 @@
                 power: "данных нет",
                 history: "Построена в 1935 году, когда эти места принадлежали Финляндии (поселок Райвола). В 1962 году станция пришла в негодность и была заброшена. Сейчас ГЭС выполняет функции плотины, сдерживая воды Рощинского озера.",
                 techDesc: "Сооружение пропускает воду каскадом, образуя небольшие водопады. Здание машинного зала заброшено. Водосброс реки Рощинки трёхступенчатый, высота — около 10 м.",
-                route: "В центре посёлка Рощино, рядом с парковой зоной. От ж/д станции 20-30 минут пешком.",
-                images: []
+                route: "В центре посёлка Рощино, рядом с парковой зоной. От ж/д станции 20-30 минут пешком."
             },
             {
                 id: 3,
@@ -354,8 +211,7 @@
                 power: "400 кВт",
                 history: "Построена на реке Оредеж в 1953 году. Работала до 1970-х годов. В 2010-х годах здание выкуплено частными лицами и отреставрировано. Сейчас это частный жилой дом и гостевой комплекс.",
                 techDesc: "Мощность 400 кВт, годовая выработка 2,4 млн кВт·ч, напор 5,5 метров. Две горизонтальные турбины.",
-                route: "От Санкт-Петербурга по Киевскому шоссе до Вырицы. Ориентир — автомобильный мост через Оредеж.",
-                images: []
+                route: "От Санкт-Петербурга по Киевскому шоссе до Вырицы. Ориентир — автомобильный мост через Оредеж."
             },
             {
                 id: 4,
@@ -370,8 +226,7 @@
                 power: "1,5 МВт",
                 history: "Плотина сооружена ещё в 1860-х годах братьями Чикиными для медного завода. ГЭС построена в 1967 году. В 1970-1973 годах остановлена из-за ввода ЛАЭС.",
                 techDesc: "Сооружения: плотина (Чикинское озеро), здание ГЭС, отводящий канал. В 2022 году проведены ремонтные работы.",
-                route: "На автобусе №502 от ж/д станции Сиверская.",
-                images: []
+                route: "На автобусе №502 от ж/д станции Сиверская."
             },
             {
                 id: 5,
@@ -386,91 +241,70 @@
                 power: "370 кВт",
                 history: "Построена в 1952 году в истоке реки Быстрица из озера Врево. Работала до начала 1970-х годов. Сооружения сохранились в хорошем состоянии.",
                 techDesc: "Высота подпора воды 6,6 метра, мощность 370 кВт, выработка 2,22 млн кВт·ч.",
-                route: "По Киевскому шоссе до поворота на Лугу, затем через деревни Большие Крупели и Наволок.",
-                images: []
+                route: "По Киевскому шоссе до поворота на Лугу, затем через деревни Большие Крупели и Наволок."
             }
         ];
         
-        let map;
-        let currentMarkers = [];
-        let currentSearchTerm = "";
+        var map;
+        var currentMarkers = [];
+        var currentSearchTerm = "";
         
+        // Инициализация карты
         function initMap() {
             map = L.map('map').setView([59.5, 30.5], 8);
             
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-                subdomains: 'abcd',
-                maxZoom: 19
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             }).addTo(map);
         }
         
+        // Обновление счётчиков
         function updateStats() {
-            const total = mgesData.length;
-            const abandoned = mgesData.filter(s => s.status === "заброшена").length;
-            const restored = mgesData.filter(s => s.status === "отреставрирована").length;
+            var total = mgesData.length;
+            var abandoned = 0;
+            var restored = 0;
+            
+            for (var i = 0; i < mgesData.length; i++) {
+                if (mgesData[i].status === "заброшена") abandoned++;
+                if (mgesData[i].status === "отреставрирована") restored++;
+            }
             
             document.getElementById('totalCount').textContent = total;
             document.getElementById('abandonedCount').textContent = abandoned;
             document.getElementById('restoredCount').textContent = restored;
         }
         
-        function openModal(imgSrc) {
-            const modal = document.getElementById('imageModal');
-            const modalImg = document.getElementById('modalImage');
-            modal.style.display = "block";
-            modalImg.src = imgSrc;
-        }
-        
-        function closeModal() {
-            document.getElementById('imageModal').style.display = "none";
-        }
-        
+        // Показать подробности
         function showDetails(id) {
-            const station = mgesData.find(s => s.id === id);
+            var station = null;
+            for (var i = 0; i < mgesData.length; i++) {
+                if (mgesData[i].id === id) {
+                    station = mgesData[i];
+                    break;
+                }
+            }
             if (!station) return;
             
-            const sidebar = document.getElementById('sidebar');
+            var sidebar = document.getElementById('sidebar');
             document.getElementById('sidebarTitle').innerHTML = station.name;
             
-            const historyHtml = station.history.replace(/\n/g, '<br>');
-            const techHtml = station.techDesc.replace(/\n/g, '<br>');
+            var historyHtml = station.history.replace(/\n/g, '<br>');
+            var techHtml = station.techDesc.replace(/\n/g, '<br>');
             
-            let galleryHtml = '';
-            if (station.images && station.images.length > 0) {
-                galleryHtml = '<h4>📸 Фотографии</h4><div class="gallery">';
-                for (let i = 0; i < station.images.length; i++) {
-                    galleryHtml += '<img src="' + station.images[i] + '" alt="Фото" onclick="openModal(\'' + station.images[i] + '\')">';
-                }
-                galleryHtml += '</div>';
-            }
+            var statusText = station.status === "заброшена" ? "🏚️ Заброшена" : "🏠 Отреставрирована";
+            var closedText = station.yearClosed ? "Прекратила работу: " + station.yearClosed + " год" : "Объект отреставрирован и используется";
             
-            const statusText = station.status === "заброшена" ? "🏚️ Заброшена" : "🏠 Отреставрирована";
-            const closedText = station.yearClosed ? "Прекратила работу: " + station.yearClosed + " год" : "Объект отреставрирован и используется";
-            
-            document.getElementById('sidebarContent').innerHTML = `
-                <p><strong>📍 Регион:</strong> ${station.region}</p>
-                <p><strong>📛 Прежнее название:</strong> ${station.oldName || 'нет данных'}</p>
-                <p><strong>📊 Статус:</strong> ${statusText}</p>
-                <p><strong>🏗️ Год постройки:</strong> ${station.yearBuilt}</p>
-                <p><strong>⛔ ${closedText}</strong></p>
-                <p><strong>⚡ Мощность:</strong> ${station.power}</p>
-                
-                <h4>📜 История</h4>
-                <p>${historyHtml}</p>
-                
-                <h4>🔧 Техническое описание</h4>
-                <p>${techHtml}</p>
-                
-                <h4>🗺️ Как добраться</h4>
-                <p>${station.route}</p>
-                
-                ${galleryHtml}
-                
-                <button class="route-btn" onclick="window.open('https://yandex.ru/maps/?pt=${station.lon},${station.lat}&z=17&l=map', '_blank')">
-                    🧭 Открыть маршрут в Яндекс.Картах
-                </button>
-            `;
+            document.getElementById('sidebarContent').innerHTML = 
+                '<p><strong>📍 Регион:</strong> ' + station.region + '</p>' +
+                '<p><strong>📛 Прежнее название:</strong> ' + (station.oldName || 'нет данных') + '</p>' +
+                '<p><strong>📊 Статус:</strong> ' + statusText + '</p>' +
+                '<p><strong>🏗️ Год постройки:</strong> ' + station.yearBuilt + '</p>' +
+                '<p><strong>⛔ ' + closedText + '</strong></p>' +
+                '<p><strong>⚡ Мощность:</strong> ' + station.power + '</p>' +
+                '<h4>📜 История</h4><p>' + historyHtml + '</p>' +
+                '<h4>🔧 Техническое описание</h4><p>' + techHtml + '</p>' +
+                '<h4>🗺️ Как добраться</h4><p>' + station.route + '</p>' +
+                '<button class="route-btn" onclick="window.open(\'https://yandex.ru/maps/?pt=' + station.lon + ',' + station.lat + '&z=17&l=map\', \'_blank\')">🧭 Открыть маршрут в Яндекс.Картах</button>';
             
             sidebar.classList.add('open');
         }
@@ -479,58 +313,47 @@
             document.getElementById('sidebar').classList.remove('open');
         }
         
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                closeSidebar();
-                closeModal();
-            }
-        });
-        
+        // Отрисовка маркеров
         function renderMarkers() {
-            for (let i = 0; i < currentMarkers.length; i++) {
+            for (var i = 0; i < currentMarkers.length; i++) {
                 map.removeLayer(currentMarkers[i]);
             }
             currentMarkers = [];
             
-            let filtered = [];
-            for (let i = 0; i < mgesData.length; i++) {
+            var filtered = [];
+            for (var i = 0; i < mgesData.length; i++) {
                 filtered.push(mgesData[i]);
             }
             
             if (currentSearchTerm.trim() !== "") {
-                const term = currentSearchTerm.toLowerCase().trim();
+                var term = currentSearchTerm.toLowerCase().trim();
                 filtered = [];
-                for (let i = 0; i < mgesData.length; i++) {
-                    const s = mgesData[i];
-                    if (s.name.toLowerCase().includes(term) || 
-                        (s.region && s.region.toLowerCase().includes(term)) ||
-                        (s.oldName && s.oldName.toLowerCase().includes(term))) {
+                for (var i = 0; i < mgesData.length; i++) {
+                    var s = mgesData[i];
+                    if (s.name.toLowerCase().indexOf(term) !== -1 || 
+                        (s.region && s.region.toLowerCase().indexOf(term) !== -1) ||
+                        (s.oldName && s.oldName.toLowerCase().indexOf(term) !== -1)) {
                         filtered.push(s);
                     }
                 }
             }
             
-            for (let i = 0; i < filtered.length; i++) {
-                const station = filtered[i];
-                const markerColor = station.status === "заброшена" ? "#9e2a2a" : "#2a7a3a";
-                const iconHtml = station.status === "заброшена" ? "🏚️" : "🏠";
+            for (var i = 0; i < filtered.length; i++) {
+                var station = filtered[i];
+                var markerColor = station.status === "заброшена" ? "#9e2a2a" : "#2a7a3a";
+                var iconHtml = station.status === "заброшена" ? "🏚️" : "🏠";
                 
-                const customIcon = L.divIcon({
+                var customIcon = L.divIcon({
                     html: '<div style="background-color: ' + markerColor + '; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.3); font-size: 16px;">' + iconHtml + '</div>',
                     iconSize: [32, 32],
                     className: 'custom-marker'
                 });
                 
-                const marker = L.marker([station.lat, station.lon], { icon: customIcon }).addTo(map);
+                var marker = L.marker([station.lat, station.lon], { icon: customIcon }).addTo(map);
                 
-                const popupContent = '<b>' + station.name + '</b><br>📍 ' + (station.region || 'Ленинградская область') + '<br>' + (station.status === "заброшена" ? "🏚️ Заброшена" : "🏠 Отреставрирована") + '<br><button onclick="showDetails(' + station.id + ')" style="margin-top:8px; padding:5px 12px; background:#9e2a2a; color:white; border:none; border-radius:4px; cursor:pointer;">📖 Подробнее</button>';
+                var popupContent = '<b>' + station.name + '</b><br>📍 ' + (station.region || 'Ленинградская область') + '<br>' + (station.status === "заброшена" ? "🏚️ Заброшена" : "🏠 Отреставрирована") + '<br><button onclick="showDetails(' + station.id + ')" style="margin-top:8px; padding:5px 12px; background:#9e2a2a; color:white; border:none; border-radius:4px; cursor:pointer;">📖 Подробнее</button>';
                 
                 marker.bindPopup(popupContent);
-                
-                marker.on('click', function() {
-                    showDetails(station.id);
-                });
-                
                 currentMarkers.push(marker);
             }
         }
@@ -539,23 +362,23 @@
             renderMarkers();
         }
         
-        function setupEventListeners() {
-            const searchInput = document.getElementById('searchInput');
+        // Запуск при загрузке страницы
+        document.addEventListener('DOMContentLoaded', function() {
+            initMap();
+            updateStats();
+            
+            var searchInput = document.getElementById('searchInput');
             searchInput.addEventListener('input', function(e) {
                 currentSearchTerm = e.target.value;
                 applySearch();
             });
-        }
-        
-        document.addEventListener('DOMContentLoaded', function() {
-            initMap();
-            updateStats();
-            setupEventListeners();
+            
             setTimeout(function() {
                 renderMarkers();
-            }, 100);
+            }, 200);
         });
         
+        // Дата в футере
         document.getElementById('lastUpdate').textContent = new Date().toLocaleString('ru-RU', {
             day: 'numeric',
             month: 'long',
