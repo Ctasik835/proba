@@ -1,6 +1,6 @@
 // Чат-бот с YandexGPT через Yandex Cloud Functions
 (function() {
-    const PROXY_URL = 'https://functions.yandexcloud.net/ВАШ_ИДЕНТИФИКАТОР'; // ЗАМЕНИТЕ НА СВОЙ URL
+    const PROXY_URL = 'https://functions.yandexcloud.net/d4e7vi4aes1eeep2k8tr'; // ЗАМЕНИТЕ НА СВОЙ URL
 
     // Стили (оставляем те же, что были)
     const style = document.createElement('style');
