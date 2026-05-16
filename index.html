@@ -34,7 +34,6 @@
             border-radius: 8px;
             border-left: 4px solid #9e2a2a;
         }
-        .counter-top { margin: 0 0 15px 0; }
         .stats {
             display: flex;
             gap: 25px;
@@ -62,7 +61,6 @@
         }
         #map { height: 550px; width: 100%; background-color: #f0f0f0; }
         
-        /* Скрываем атрибуцию Leaflet */
         .leaflet-control-attribution {
             display: none !important;
         }
@@ -111,6 +109,14 @@
             .sidebar { width: 100%; right: -100%; }
             #map { height: 400px; }
         }
+        
+        .ai-hint {
+            font-size: 11px;
+            color: #6c8db0;
+            margin-top: 10px;
+            border-top: 1px solid #1e2a47;
+            padding-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -122,20 +128,38 @@
             историю, техническое описание и маршрут как до них можно добраться.
         </div>
         
-        <div class="counter-top">
-           <a href="https://www.liveinternet.ru/click" target="_blank">
-               <img id="licntA113" width="88" height="120" style="border:0" 
-               title="LiveInternet: показано количество просмотров и посетителей"
-               src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAEALAAAAAABAAEAAAIBTAA7" alt=""/>
-           </a>
-           <script>
-               (function(d,s){
-                   d.getElementById("licntA113").src = "https://counter.yadro.ru/hit?t28.9;r"+escape(d.referrer)+
-                   ((typeof(s)=="undefined")?"":";s"+s.width+"*"+s.height+"*"+
-                   (s.colorDepth?s.colorDepth:s.pixelDepth))+";u"+escape(d.URL)+
-                   ";h"+escape(d.title.substring(0,150))+";"+Math.random();
-               })(document,screen);
-           </script>
+        <!-- ============================================================ -->
+        <!-- БЛОК ИИ-СПРАВОЧНИКА (комбинированный: карта + интернет)       -->
+        <!-- ============================================================ -->
+        <div style="background: #1a1a2e; color: white; border-radius: 16px; padding: 20px; margin: 15px 0; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+            <h3 style="margin: 0 0 5px 0; display: flex; align-items: center; gap: 10px;">
+                <span>⚡</span> 
+                <span>ИИ-эксперт по гидроэнергетике</span>
+            </h3>
+            <p style="font-size: 14px; opacity: 0.8; margin-bottom: 15px;">
+                Спросите про историю ГЭС, их устройство, мощность или как до них добраться.
+                ИИ знает все данные с этой карты и может дополнить ответ из общих знаний.
+            </p>
+            
+            <div style="display: flex; gap: 10px; margin: 15px 0; flex-wrap: wrap;">
+                <input type="text" id="aiQuestion" placeholder="Например: какая ГЭС самая мощная?" style="flex: 1; padding: 12px 18px; border-radius: 40px; border: none; font-size: 15px;">
+                <button id="askAiBtn" style="background: #4a6fa5; color: white; border: none; padding: 12px 28px; border-radius: 40px; cursor: pointer; font-weight: bold;">✨ Спросить ИИ</button>
+            </div>
+            
+            <div id="aiThinking" style="display: none; text-align: center; padding: 20px;">
+                🤔 ИИ анализирует вопрос... 
+            </div>
+            
+            <div id="aiAnswerBox" style="background: #16213e; border-radius: 16px; padding: 18px; margin-top: 10px; display: none; border-left: 5px solid #4a6fa5;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <strong style="font-size: 16px;">🤖 Ответ ИИ-эксперта:</strong>
+                    <button onclick="closeAnswer()" style="background: none; border: none; color: #aaa; font-size: 20px; cursor: pointer;">✖</button>
+                </div>
+                <div id="aiAnswerText" style="line-height: 1.5; font-size: 15px;"></div>
+                <div class="ai-hint">
+                    📌 Ответ основан на данных с карты (приоритет) и общих знаниях нейросети
+                </div>
+            </div>
         </div>
         
         <div class="stats" id="statsPanel">
@@ -172,7 +196,9 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <script>
-        // ДАННЫЕ О ГЭС
+        // ============================================================
+        // ДАННЫЕ О ГЭС (база знаний с карты)
+        // ============================================================
         var mgesData = [
             {
                 id: 1,
@@ -251,29 +277,134 @@
             }
         ];
         
+        // ============================================================
+        // ФУНКЦИЯ ДЛЯ ФОРМИРОВАНИЯ БАЗЫ ЗНАНИЙ (данные с карты)
+        // ============================================================
+        function getKnowledgeBase() {
+            let knowledge = "=== ДАННЫЕ С КАРТЫ (ЭТО ТОЧНАЯ ИНФОРМАЦИЯ, ПРИОРИТЕТНАЯ) ===\n\n";
+            
+            for (var i = 0; i < mgesData.length; i++) {
+                var s = mgesData[i];
+                knowledge += "【" + s.name + "】\n";
+                knowledge += "📍 Регион: " + s.region + "\n";
+                knowledge += "📊 Статус: " + (s.status === "заброшена" ? "заброшена" : "отреставрирована") + "\n";
+                knowledge += "🏗️ Год постройки: " + s.yearBuilt + "\n";
+                if (s.yearClosed) knowledge += "⛔ Год закрытия: " + s.yearClosed + "\n";
+                knowledge += "⚡ Мощность: " + s.power + "\n";
+                knowledge += "📜 История (кратко): " + s.history.substring(0, 400) + "...\n";
+                knowledge += "🔧 Техническое описание: " + s.techDesc + "\n";
+                knowledge += "🗺️ Как добраться: " + s.route + "\n\n";
+            }
+            
+            return knowledge;
+        }
+        
+        // ============================================================
+        // ИИ-СПРАВОЧНИК (комбинированный подход: карта + интернет)
+        // ============================================================
+        const PROXY_URL = "https://yandex-gpt-proxy.onrender.com/ask";
+        
+        async function askRealAI(question) {
+            const knowledgeBase = getKnowledgeBase();
+            
+            const systemPrompt = `Ты — эксперт по гидроэнергетике и малым гидроэлектростанциям (ГЭС) Ленинградской области.
+
+🔹 **ПРАВИЛА ОТВЕТА (очень важно!):**
+
+1. **Приоритет — данным с карты.** Сначала ищи ответ в разделе «ДАННЫЕ С КАРТЫ». Эти данные точные и достоверные. Если там есть ответ — используй ТОЛЬКО его.
+
+2. **Если в данных с карты ответа нет** — можешь дополнить ответ своими общими знаниями о гидроэнергетике, истории ГЭС в России/мире, экологии рек и т.д.
+
+3. **Если используешь общие знания**, можешь упомянуть, что «согласно открытым источникам...» или «в гидроэнергетике принято...».
+
+4. **Комбинируй аккуратно:** Если вопрос требует и точных данных (например, мощность конкретной ГЭС), и общих объяснений (почему ГЭС важны) — сначала дай точные данные с карты, затем добавь общий контекст.
+
+5. **Если данных на карте недостаточно для полного ответа** — честно скажи, какой информации нет в карте, но дай общий ответ из своих знаний.
+
+6. Отвечай на русском языке кратко, понятно и полезно (2-5 предложений для простых вопросов, до 8-10 для сложных).
+
+Вот точные данные с карты (используй их в первую очередь):
+
+${knowledgeBase}
+
+Теперь ответь на вопрос пользователя, следуя правилам выше.`;
+            
+            try {
+                const response = await fetch(PROXY_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        question: question,
+                        system_prompt: systemPrompt
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error("Ошибка прокси:", response.status, errorText);
+                    return `❌ Ошибка сервера (${response.status}). Попробуйте позже.`;
+                }
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    return `❌ Ошибка: ${data.error}`;
+                }
+                
+                return data.answer || "Не удалось получить ответ.";
+                
+            } catch (error) {
+                console.error("Сетевая ошибка:", error);
+                return "❌ Ошибка соединения с сервером. Проверьте интернет и попробуйте снова.";
+            }
+        }
+        
+        // Обработчик кнопки ИИ
+        document.getElementById('askAiBtn').onclick = async function() {
+            const question = document.getElementById('aiQuestion').value.trim();
+            if (!question) {
+                alert('Напишите вопрос!');
+                return;
+            }
+            
+            document.getElementById('aiThinking').style.display = 'block';
+            document.getElementById('aiAnswerBox').style.display = 'none';
+            
+            const answer = await askRealAI(question);
+            
+            document.getElementById('aiAnswerText').innerHTML = answer.replace(/\n/g, '<br>');
+            document.getElementById('aiAnswerBox').style.display = 'block';
+            document.getElementById('aiThinking').style.display = 'none';
+        };
+        
+        function closeAnswer() {
+            document.getElementById('aiAnswerBox').style.display = 'none';
+        }
+        
+        document.getElementById('aiQuestion').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') document.getElementById('askAiBtn').click();
+        });
+        
+        // ============================================================
+        // КАРТА И МАРКЕРЫ
+        // ============================================================
         var map;
         var currentMarkers = [];
         var currentSearchTerm = "";
         
-        // Инициализация карты с использованием свободных тайлов (работает в России)
         function initMap() {
-            // Отключаем атрибуцию Leaflet
             map = L.map('map', {
                 attributionControl: false
             }).setView([59.5, 30.5], 8);
             
-            // Используем тайлы от OpenStreetMap через зеркало, работающее в РФ
-            // Или можно использовать карты от Humanitarian OpenStreetMap Team
             L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
                 maxZoom: 19,
                 attribution: ''
             }).addTo(map);
             
-            // Добавляем простой масштаб
             L.control.scale({ metric: true, imperial: false }).addTo(map);
         }
         
-        // Обновление счётчиков
         function updateStats() {
             var total = mgesData.length;
             var abandoned = 0;
@@ -289,7 +420,6 @@
             document.getElementById('restoredCount').textContent = restored;
         }
         
-        // Показать подробности
         function showDetails(id) {
             var station = null;
             for (var i = 0; i < mgesData.length; i++) {
@@ -328,7 +458,6 @@
             document.getElementById('sidebar').classList.remove('open');
         }
         
-        // Отрисовка маркеров
         function renderMarkers() {
             for (var i = 0; i < currentMarkers.length; i++) {
                 map.removeLayer(currentMarkers[i]);
@@ -377,7 +506,6 @@
             renderMarkers();
         }
         
-        // Запуск при загрузке страницы
         document.addEventListener('DOMContentLoaded', function() {
             initMap();
             updateStats();
@@ -393,13 +521,11 @@
             }, 200);
         });
         
-        // Дата в футере
         document.getElementById('lastUpdate').textContent = new Date().toLocaleString('ru-RU', {
             day: 'numeric',
             month: 'long',
             year: 'numeric'
         });
     </script>
-    <script src="chatbot-local.js"></script>
 </body>
 </html>
