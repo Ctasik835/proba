@@ -1,0 +1,1078 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Интерактивная карта ГЭС — динамика и катастрофы</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<style>
+:root{
+  --bg:#0d1117; --panel:rgba(16,22,30,.92); --panel2:rgba(22,30,40,.95);
+  --line:#2a3644; --txt:#dbe6f2; --dim:#8ba0b6; --acc:#31c9ff; --acc2:#ffb02e;
+  --ok:#3ddc84; --warn:#ff6b6b; --flood:#ff3b3b;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;font-family:'Segoe UI',Roboto,system-ui,sans-serif;
+  background:var(--bg);color:var(--txt);overflow:hidden}
+#map{position:absolute;inset:0;z-index:1;background:#0d1117}
+
+#topbar{
+  position:absolute;top:12px;left:12px;z-index:1000;
+  background:var(--panel);backdrop-filter:blur(10px);
+  border:1px solid var(--line);border-radius:12px;padding:10px 16px;
+  box-shadow:0 8px 28px rgba(0,0,0,.5);pointer-events:none;
+}
+#topbar h1{margin:0;font-size:15px;font-weight:600;letter-spacing:.2px}
+#topbar p{margin:3px 0 0;font-size:11px;color:var(--dim)}
+
+#modeTabs{
+  position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;
+  background:var(--panel);backdrop-filter:blur(10px);
+  border:1px solid var(--line);border-radius:12px;
+  display:flex;padding:5px;gap:4px;
+  box-shadow:0 8px 28px rgba(0,0,0,.5);
+}
+#modeTabs button{
+  background:transparent;color:var(--dim);border:0;cursor:pointer;
+  padding:8px 14px;border-radius:8px;font-size:12px;font-weight:500;
+  transition:.15s;font-family:inherit;
+}
+#modeTabs button:hover{color:var(--txt);background:rgba(255,255,255,.05)}
+#modeTabs button.active{background:rgba(49,201,255,.18);color:var(--acc);font-weight:600}
+#modeTabs button:disabled{opacity:.4;cursor:not-allowed}
+
+#sidebar{
+  position:absolute;top:64px;left:12px;bottom:100px;width:330px;z-index:1000;
+  background:var(--panel);backdrop-filter:blur(10px);
+  border:1px solid var(--line);border-radius:12px;
+  display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:0 8px 28px rgba(0,0,0,.5);
+}
+#sidebar header{padding:12px 14px 8px;font-size:12px;color:var(--dim);
+  text-transform:uppercase;letter-spacing:.8px;border-bottom:1px solid var(--line)}
+
+/* сценарии */
+#scenarios{padding:8px;border-bottom:1px solid var(--line);display:grid;
+  grid-template-columns:1fr 1fr;gap:5px}
+.scenBtn{
+  background:rgba(255,255,255,.04);color:var(--dim);border:1px solid var(--line);
+  border-radius:8px;padding:7px 6px;font-size:11px;cursor:pointer;
+  display:flex;align-items:center;gap:5px;font-family:inherit;font-weight:500;
+  transition:.15s;
+}
+.scenBtn:hover{background:rgba(255,255,255,.08);color:var(--txt)}
+.scenBtn.active{background:rgba(49,201,255,.18);border-color:rgba(49,201,255,.5);color:var(--acc)}
+.scenBtn.danger.active{background:rgba(255,59,59,.2);border-color:rgba(255,59,59,.55);color:#ff6b6b}
+
+#hppList{overflow-y:auto;flex:1;padding:6px}
+.hppItem{
+  display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;
+  cursor:pointer;transition:background .15s;font-size:13px;
+}
+.hppItem:hover{background:rgba(49,201,255,.09)}
+.hppItem.active{background:rgba(49,201,255,.16);outline:1px solid rgba(49,201,255,.4)}
+.dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 8px currentColor}
+.hppItem .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hppItem .mw{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+#details{border-top:1px solid var(--line);padding:10px 14px 14px;font-size:12px;
+  max-height:40%;overflow-y:auto}
+#details h3{margin:0 0 8px;font-size:13px;color:var(--acc)}
+.kv{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed rgba(255,255,255,.06)}
+.kv span:first-child{color:var(--dim)}
+.kv span:last-child{font-variant-numeric:tabular-nums;font-weight:500}
+.kv.danger span:last-child{color:#ff6b6b;font-weight:700}
+
+#timeline{
+  position:absolute;left:355px;right:12px;bottom:12px;height:76px;z-index:1000;
+  background:var(--panel);backdrop-filter:blur(10px);
+  border:1px solid var(--line);border-radius:12px;
+  display:flex;align-items:center;gap:14px;padding:0 18px;
+  box-shadow:0 8px 28px rgba(0,0,0,.5);
+}
+#playBtn{
+  width:40px;height:40px;border-radius:50%;border:1px solid var(--acc);
+  background:rgba(49,201,255,.13);color:var(--acc);font-size:15px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;flex:0 0 auto;transition:.15s;
+}
+#playBtn:hover{background:rgba(49,201,255,.28)}
+#dateBox{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;
+  min-width:104px;text-align:center;color:var(--acc)}
+#sliderWrap{flex:1;display:flex;flex-direction:column;gap:2px}
+input[type=range]{
+  -webkit-appearance:none;width:100%;height:5px;border-radius:3px;background:#243040;outline:none;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:16px;height:16px;border-radius:50%;
+  background:var(--acc);cursor:pointer;box-shadow:0 0 10px rgba(49,201,255,.8);
+}
+input[type=range]::-moz-range-thumb{
+  width:16px;height:16px;border:0;border-radius:50%;background:var(--acc);cursor:pointer;
+}
+.ticks{display:flex;justify-content:space-between;font-size:10px;color:var(--dim)}
+#speedBox{display:flex;flex-direction:column;gap:3px;font-size:10px;color:var(--dim);align-items:center}
+#speedBox select{
+  background:#1a2430;color:var(--txt);border:1px solid var(--line);
+  border-radius:6px;padding:3px 6px;font-size:11px;outline:none;
+}
+
+#chartPanel{
+  position:absolute;right:12px;bottom:100px;width:450px;height:265px;z-index:1000;
+  background:var(--panel);backdrop-filter:blur(10px);
+  border:1px solid var(--line);border-radius:12px;padding:10px 12px 6px;
+  box-shadow:0 8px 28px rgba(0,0,0,.5);
+  display:none;flex-direction:column;
+}
+#chartPanel.show{display:flex}
+#chartPanel .head{display:flex;justify-content:space-between;align-items:center;
+  font-size:12px;color:var(--dim);margin-bottom:4px}
+#chartPanel .head b{color:var(--acc);font-size:13px}
+#chartPanel canvas{flex:1;min-height:0}
+
+#alertBanner{
+  position:absolute;top:110px;left:50%;transform:translateX(-50%);z-index:1500;
+  background:rgba(255,59,59,.94);color:#fff;padding:10px 22px;border-radius:10px;
+  font-size:13px;font-weight:600;display:none;gap:10px;align-items:center;
+  box-shadow:0 8px 32px rgba(255,59,59,.5);animation:pulse 1.4s infinite;
+}
+#alertBanner.show{display:flex}
+@keyframes pulse{
+  0%,100%{box-shadow:0 8px 32px rgba(255,59,59,.5)}
+  50%{box-shadow:0 8px 42px rgba(255,59,59,.9)}
+}
+
+#loader{
+  position:absolute;inset:0;z-index:3000;background:rgba(9,13,18,.94);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  transition:opacity .4s;
+}
+#loader.hide{opacity:0;pointer-events:none}
+.spin{width:44px;height:44px;border:3px solid #22303f;border-top-color:var(--acc);
+  border-radius:50%;animation:sp .9s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+#loadTxt{font-size:13px;color:var(--dim);text-align:center;max-width:400px;line-height:1.5}
+
+.leaflet-popup-content-wrapper{background:var(--panel2);color:var(--txt);
+  border:1px solid var(--line);border-radius:10px;backdrop-filter:blur(10px)}
+.leaflet-popup-tip{background:var(--panel2)}
+.leaflet-popup-content{margin:12px 14px;font-size:12px;line-height:1.55}
+.leaflet-popup-content h4{margin:0 0 7px;font-size:13px;color:var(--acc)}
+.leaflet-container a.leaflet-popup-close-button{color:var(--dim)}
+
+#modeInfo{
+  position:absolute;top:64px;right:12px;z-index:1000;
+  background:var(--panel);backdrop-filter:blur(10px);
+  border:1px solid var(--line);border-radius:10px;padding:8px 14px;
+  font-size:11px;color:var(--dim);max-width:280px;line-height:1.5;
+  box-shadow:0 8px 28px rgba(0,0,0,.5);
+}
+#modeInfo b{color:var(--acc)}
+
+@media(max-width:1100px){
+  #chartPanel{display:none!important}
+  #sidebar{width:290px}
+  #timeline{left:315px}
+  #modeInfo{display:none}
+}
+@media(max-width:760px){
+  #sidebar{display:none}
+  #timeline{left:12px}
+}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<header id="topbar">
+  <h1>⚡ Интерактивная карта ГЭС</h1>
+  <p>Рельеф · климат · гидрология · катастрофы</p>
+</header>
+
+<div id="modeTabs">
+  <button data-mode="history" class="active">📜 История</button>
+  <button data-mode="forecast">🌤 Прогноз ·16 дн.</button>
+  <button data-mode="climate">🌍 Климат ·2050</button>
+</div>
+
+<div id="alertBanner">💥 ПРОРЫВ ПЛОТИНЫ — распространение волны затопления</div>
+
+<div id="modeInfo">
+  <b>Режим:</b> <span id="modeDesc">архивные данные ERA5 и GloFAS с 1984 г.</span>
+</div>
+
+<aside id="sidebar">
+  <header>Сценарии</header>
+  <div id="scenarios">
+    <button class="scenBtn active" data-scen="normal">📊 Норма</button>
+    <button class="scenBtn" data-scen="flood">🌊 Паводок</button>
+    <button class="scenBtn" data-scen="drought">☀️ Засуха</button>
+    <button class="scenBtn danger" data-scen="dam_break">💥 Прорыв</button>
+  </div>
+  <header style="border-top:1px solid var(--line)">Каскад ГЭС <span id="hppCount"></span></header>
+  <div id="hppList"></div>
+  <div id="details">
+    <h3>Выберите ГЭС на карте</h3>
+    <p style="color:var(--dim);margin:0">Клик по маркеру или по списку — детали и график.</p>
+  </div>
+</aside>
+
+<div id="timeline">
+  <button id="playBtn">▶</button>
+  <div id="dateBox">—</div>
+  <div id="sliderWrap">
+    <input type="range" id="slider" min="0" max="0" value="0" step="1"/>
+    <div class="ticks"><span id="tickA"></span><span id="tickB"></span><span id="tickC"></span></div>
+  </div>
+  <div id="speedBox">
+    <span>скорость</span>
+    <select id="speed">
+      <option value="30">×1</option>
+      <option value="10" selected>×3</option>
+      <option value="3">×10</option>
+      <option value="1">×30</option>
+    </select>
+  </div>
+</div>
+
+<section id="chartPanel">
+  <div class="head">
+    <b id="chartTitle">—</b>
+    <span id="chartSub"></span>
+  </div>
+  <canvas id="chart"></canvas>
+</section>
+
+<div id="loader">
+  <div class="spin"></div>
+  <div id="loadTxt">Загрузка данных…</div>
+</div>
+
+<script>
+/* =========================================================================
+   1. ПАСПОРТНЫЕ ДАННЫЕ ГЭС
+   Данные из открытых источников (Википедия, РусГидро, отчёты).
+   flowDir — приблизительное направление течения реки, градусы (0=север).
+   ========================================================================= */
+const HPPS = [
+  { id:'volzh',  name:'Волжская ГЭС',      river:'Волга',      lat:48.8253, lon:44.6806, flowDir:180,
+    capacityMW:2671, head:20, nmu:15.0,  umo:12.5, areaNMU:3117, totalVolume:31.5, usefulVolume:6.5,  eff:0.93, year:1961 },
+  { id:'zhig',   name:'Жигулёвская ГЭС',   river:'Волга',      lat:53.4269, lon:49.4289, flowDir:200,
+    capacityMW:2488, head:21, nmu:53.0,  umo:49.0, areaNMU:6450, totalVolume:58.0, usefulVolume:21.0, eff:0.93, year:1957 },
+  { id:'sar',    name:'Саратовская ГЭС',   river:'Волга',      lat:52.0278, lon:47.7931, flowDir:210,
+    capacityMW:1403, head:15, nmu:28.0,  umo:25.0, areaNMU:1831, totalVolume:12.9, usefulVolume:4.5,  eff:0.92, year:1968 },
+  { id:'cheb',   name:'Чебоксарская ГЭС',  river:'Волга',      lat:56.1358, lon:47.4647, flowDir:220,
+    capacityMW:1370, head:14, nmu:63.0,  umo:61.0, areaNMU:2182, totalVolume:13.8, usefulVolume:3.6,  eff:0.92, year:1986 },
+  { id:'nnov',   name:'Нижегородская ГЭС', river:'Волга',      lat:56.6419, lon:43.4911, flowDir:230,
+    capacityMW:530,  head:16, nmu:84.0,  umo:81.0, areaNMU:1590, totalVolume:8.7,  usefulVolume:3.9,  eff:0.91, year:1956 },
+  { id:'votk',   name:'Воткинская ГЭС',    river:'Кама',       lat:56.9264, lon:53.9261, flowDir:200,
+    capacityMW:1100, head:18, nmu:89.0,  umo:86.0, areaNMU:1120, totalVolume:9.4,  usefulVolume:2.8,  eff:0.92, year:1963 },
+  { id:'kam',    name:'Камская ГЭС',       river:'Кама',       lat:58.1139, lon:56.3297, flowDir:180,
+    capacityMW:552,  head:17, nmu:108.5, umo:103.5,areaNMU:1910, totalVolume:12.2, usefulVolume:7.9,  eff:0.91, year:1958 },
+  { id:'ssh',    name:'Саяно‑Шушенская ГЭС',river:'Енисей',    lat:52.8267, lon:91.3703, flowDir:10,
+    capacityMW:6400, head:194,nmu:540.0, umo:500.0,areaNMU:621,  totalVolume:31.3, usefulVolume:15.3, eff:0.94, year:1985 },
+  { id:'kras',   name:'Красноярская ГЭС',  river:'Енисей',     lat:55.9333, lon:92.3000, flowDir:10,
+    capacityMW:6000, head:93, nmu:243.0, umo:225.0,areaNMU:2000, totalVolume:73.3, usefulVolume:20.0, eff:0.94, year:1972 },
+  { id:'bratsk', name:'Братская ГЭС',      river:'Ангара',     lat:56.2833, lon:101.7667,flowDir:20,
+    capacityMW:4500, head:100,nmu:402.0, umo:392.0,areaNMU:5470, totalVolume:169.3,usefulVolume:48.0, eff:0.94, year:1967 }
+];
+
+/* =========================================================================
+   2. КАРТА
+   ========================================================================= */
+const map = L.map('map', { zoomControl:true, preferCanvas:true })
+             .setView([56.5, 60], 4);
+
+const baseLayers = {
+  '🌍 OpenStreetMap': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {maxZoom:18, attribution:'© OpenStreetMap'}),
+  '⛰ Рельеф (OpenTopoMap)': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+      {maxZoom:17, attribution:'© OpenTopoMap, SRTM'}),
+  '🛰 Спутник (Esri)': L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      {maxZoom:18, attribution:'© Esri, Maxar'}),
+  '🌑 Тени рельефа': L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+      {maxZoom:16, attribution:'© Esri'})
+};
+baseLayers['⛰ Рельеф (OpenTopoMap)'].addTo(map);
+L.control.layers(baseLayers, null, {position:'topright'}).addTo(map);
+
+const layerReservoirs = L.layerGroup().addTo(map);
+const layerFlood      = L.layerGroup().addTo(map);
+const layerMarkers    = L.layerGroup().addTo(map);
+
+/* =========================================================================
+   3. СОСТОЯНИЕ
+   ========================================================================= */
+const S = {
+  mode: 'history',
+  scenario: 'normal',
+  dates: [],
+  results: {},
+  cache: {},           // mode -> hppId -> { hydro, clim }
+  markers: {},
+  polygons: {},        // полигоны водохранилищ
+  idx: 0,
+  playing: false,
+  selected: null,
+  chart: null,
+  lastChartUpdate: 0,
+  loading: false,
+  damBreak: null       // { id, progress, start, maxDist }
+};
+
+/* =========================================================================
+   4. ЗАГРУЗКА ДАННЫХ
+   ========================================================================= */
+const setLoad = t => document.getElementById('loadTxt').innerHTML = t;
+
+async function getJSON(url, tries = 3){
+  for (let k = 0; k < tries; k++){
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    } catch(e){
+      if (k === tries - 1) throw e;
+      await new Promise(r => setTimeout(r, 700 * (k + 1)));
+    }
+  }
+}
+
+async function loadTerrain(){
+  setLoad('Загрузка рельефа (Copernicus DEM)…');
+  const pts = [];
+  HPPS.forEach(h => {
+    for (let i = -2; i <= 2; i++)
+      for (let j = -2; j <= 2; j++)
+        pts.push([ +(h.lat + i*0.13).toFixed(4), +(h.lon + j*0.13).toFixed(4) ]);
+  });
+
+  const all = [];
+  for (let i = 0; i < pts.length; i += 90){
+    const chunk = pts.slice(i, i + 90);
+    const url = 'https://api.open-meteo.com/v1/elevation?latitude=' +
+      chunk.map(p => p[0]).join(',') + '&longitude=' + chunk.map(p => p[1]).join(',');
+    const j = await getJSON(url);
+    all.push(...j.elevation);
+  }
+
+  HPPS.forEach((h, k) => {
+    const sub = all.slice(k*25, k*25 + 25).filter(v => v !== null && !isNaN(v));
+    if (!sub.length){ h.terrain = {min:0,max:0,dam:0,ampl:0}; return; }
+    const mn = Math.min(...sub), mx = Math.max(...sub);
+    h.terrain = { min:mn, max:mx, dam:sub[12], ampl:mx - mn };
+  });
+}
+
+async function loadDischarge(h, mode){
+  if (mode === 'history'){
+    const start = '1984-01-01';
+    const end = new Date(Date.now() - 8*864e5).toISOString().slice(0,10);
+    const url = `https://flood-api.open-meteo.com/v1/flood?latitude=${h.lat}&longitude=${h.lon}` +
+                `&daily=river_discharge&start_date=${start}&end_date=${end}`;
+    const j = await getJSON(url);
+    return { time: j.daily.time, q: j.daily.river_discharge };
+  }
+  if (mode === 'forecast'){
+    const url = `https://flood-api.open-meteo.com/v1/flood?latitude=${h.lat}&longitude=${h.lon}` +
+                `&daily=river_discharge&past_days=30&forecast_days=16`;
+    const j = await getJSON(url);
+    return { time: j.daily.time, q: j.daily.river_discharge };
+  }
+  return null;
+}
+
+async function loadClimate(h, mode){
+  if (mode === 'history'){
+    const start = '1984-01-01';
+    const end = new Date(Date.now() - 8*864e5).toISOString().slice(0,10);
+    const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${h.lat}&longitude=${h.lon}` +
+                `&start_date=${start}&end_date=${end}` +
+                `&daily=temperature_2m_mean,precipitation_sum&timezone=UTC`;
+    const j = await getJSON(url);
+    return { time: j.daily.time, t: j.daily.temperature_2m_mean, p: j.daily.precipitation_sum };
+  }
+  if (mode === 'forecast'){
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${h.lat}&longitude=${h.lon}` +
+                `&daily=temperature_2m_mean,precipitation_sum&past_days=30&forecast_days=16&timezone=UTC`;
+    const j = await getJSON(url);
+    return { time: j.daily.time, t: j.daily.temperature_2m_mean, p: j.daily.precipitation_sum };
+  }
+  if (mode === 'climate'){
+    const url = `https://climate-api.open-meteo.com/v1/climate?latitude=${h.lat}&longitude=${h.lon}` +
+                `&start_date=2025-01-01&end_date=2050-12-31` +
+                `&models=MRI_AGCM3_2_S` +
+                `&daily=temperature_2m_mean,precipitation_sum`;
+    const j = await getJSON(url);
+    const t = j.daily.temperature_2m_mean_MRI_AGCM3_2_S || j.daily.temperature_2m_mean;
+    const p = j.daily.precipitation_sum_MRI_AGCM3_2_S   || j.daily.precipitation_sum;
+    return { time: j.daily.time, t, p };
+  }
+  return null;
+}
+
+function deriveRunoff(h, clim){
+  const QmaxT = h.capacityMW * 1e6 / (1000 * 9.81 * h.head * h.eff);
+  const Qmean = 0.4 * QmaxT;
+  const valid = clim.p.filter(v => v !== null && !isNaN(v));
+  const Pmean = valid.length ? valid.reduce((a,b)=>a+b,0) / valid.length : 2;
+  return clim.p.map(P => {
+    const p = P || 0;
+    return Math.max(0, Qmean * (0.4 + 0.8 * p / Math.max(0.1, Pmean)));
+  });
+}
+
+/* =========================================================================
+   5. ФИЗИЧЕСКАЯ МОДЕЛЬ
+   ========================================================================= */
+function simulate(h, hydro, clim){
+  const dh  = h.nmu - h.umo;
+  const A0  = h.areaNMU * 1e6;
+  const Vd  = (h.totalVolume - h.usefulVolume) * 1e9;
+  const p1  = Math.max(0.6, A0 * dh / (h.usefulVolume * 1e9));
+  const p   = p1 - 1;
+
+  const VofX = x => Vd + A0 * dh * Math.pow(x, p1) / p1;
+  const AofX = x => A0 * Math.pow(Math.max(x, 1e-6), p);
+  const xOfV = v => Math.pow(Math.max(1e-6, v - Vd) * p1 / (A0 * dh), 1 / p1);
+
+  const QmaxT   = h.capacityMW * 1e6 / (1000 * 9.81 * h.head * h.eff);
+  const tailBase = h.nmu - h.head;
+
+  const n = hydro.q.length;
+  const out = { level:[], area:[], power:[], flow:[], spill:[], head:[], lf:[], kwh:0 };
+
+  const cs = new Float64Array(n + 1);
+  for (let i = 0; i < n; i++) cs[i+1] = cs[i] + (hydro.q[i] || 0);
+  const WIN = 60;
+  const trail = i => {
+    const a = Math.max(0, i - WIN), b = i + 1;
+    return (cs[b] - cs[a]) / (b - a);
+  };
+
+  const targetX = 0.62;
+  let vol = VofX(targetX);
+
+  for (let i = 0; i < n; i++){
+    const x     = Math.min(1, Math.max(1e-6, xOfV(vol)));
+    const level = h.umo + x * dh;
+    const area  = AofX(x);
+
+    const T   = (clim.t[i] ?? 8);
+    const Pr  = (clim.p[i] ?? 0);
+    const evapMM = Math.max(0, 0.12 * (T + 2));
+    const Qevap  = evapMM / 1000 * area / 86400;
+    const Qrain  = Pr / 1000 * area / 86400;
+
+    const Qin  = Math.max(0, hydro.q[i] || 0);
+    const Qnet = Qin + Qrain - Qevap;
+
+    const Qbase = trail(i);
+    const err   = level - (h.umo + targetX * dh);
+    const Kp    = area / (20 * 86400);
+    let Qrel = Math.max(0, Qbase + err * Kp);
+
+    const tw      = tailBase + 1.6 * Math.pow(Math.min(1.2, Qrel / (QmaxT + 1)), 0.5);
+    let headNet   = Math.max(2, (level - tw) * 0.97);
+    const Qcap    = QmaxT * Math.min(1.15, Math.sqrt(h.head / Math.max(5, headNet)));
+
+    let Qt  = Math.min(Qrel, Qcap);
+    let Qsp = Math.max(0, Qrel - Qt);
+    if (level < h.nmu - 0.5) Qsp = 0;
+
+    let volNew = vol + (Qnet - Qt - Qsp) * 86400;
+    if (volNew > VofX(1)){
+      Qsp += (volNew - VofX(1)) / 86400;
+      volNew = VofX(1);
+    }
+    if (volNew < VofX(0.02)) volNew = VofX(0.02);
+    vol = volNew;
+
+    const qr      = Math.min(1, Qt / QmaxT);
+    const etaPart = 1 - 0.30 * Math.pow(1 - qr, 2);
+    const ice     = T < -5 ? 0.98 : 1;
+    let P = 1000 * 9.81 * Qt * headNet * h.eff * etaPart * ice / 1e6;
+    P = Math.min(P, h.capacityMW);
+    out.kwh += P * 24;
+
+    out.level.push(level);
+    out.area.push(area / 1e6);
+    out.power.push(P);
+    out.flow.push(Qt + Qsp);
+    out.spill.push(Qsp);
+    out.head.push(headNet);
+    out.lf.push(P / h.capacityMW);
+  }
+  out.p1 = p1;
+  return out;
+}
+
+/* =========================================================================
+   6. ПЕРЕСЧЁТ ПОД СЦЕНАРИЙ
+   ========================================================================= */
+function recompute(){
+  HPPS.forEach(h => {
+    const c = S.cache[S.mode]?.[h.id];
+    if (!c) { delete S.results[h.id]; return; }
+
+    let q = c.hydro.q;
+    if (S.scenario === 'flood'){
+      // Экстремальный паводок — приток в разы выше нормы на 10 дней
+      const i = S.idx;
+      q = q.map((v, k) => {
+        const d = Math.abs(k - i);
+        const mult = 1 + 5.0 * Math.exp(-d*d / 400);
+        return (v || 0) * mult;
+      });
+    } else if (S.scenario === 'drought'){
+      q = q.map(v => (v || 0) * 0.15);
+    } else if (S.scenario === 'dam_break' && S.selected === h.id){
+      // Прорыв плотины — имитируем мгновенный сброс:
+      // приток остаётся, уровень падает к УМО, мощность = 0
+      q = q.map(v => v);
+    }
+
+    S.results[h.id] = simulate(h, { time: c.hydro.time, q }, c.clim);
+
+    if (S.scenario === 'dam_break' && S.selected === h.id){
+      // Обнуляем мощность и уровень после прорыва
+      const r = S.results[h.id];
+      for (let k = 0; k < r.power.length; k++){
+        r.power[k] = 0;
+        r.lf[k] = 0;
+        r.spill[k] = r.flow[k];
+        r.flow[k] = 0;
+      }
+    }
+  });
+}
+
+/* =========================================================================
+   7. ЗАГРУЗКА ПЕРИОДА
+   ========================================================================= */
+async function loadPeriod(mode){
+  if (S.loading) return;
+  S.loading = true;
+
+  S.results = {};
+  S.idx = 0;
+  S.playing = false;
+  S.damBreak = null;
+  layerFlood.clearLayers();
+  document.getElementById('playBtn').textContent = '▶';
+  HPPS.forEach(h => { h.hydro = null; h.clim = null; h.failed = false; });
+
+  const descEl = document.getElementById('modeDesc');
+  let modeDesc = '';
+  if (mode === 'history') modeDesc = 'архив ERA5 и GloFAS с 1984 г. до сегодня';
+  if (mode === 'forecast') modeDesc = 'прогноз ECMWF/ICON и GloFAS: −30 дней, +16 дней';
+  if (mode === 'climate') modeDesc = 'климатические проекции CMIP6 до 2050 г.';
+  descEl.textContent = modeDesc;
+
+  document.getElementById('loader').classList.remove('hide');
+  document.getElementById('loader').style.display = 'flex';
+  setLoad(`Загрузка данных (${mode})… 0/${HPPS.length}`);
+
+  S.cache[mode] = {};
+
+  let done = 0;
+  await Promise.all(HPPS.map(async h => {
+    try {
+      let hydro, clim;
+      if (mode === 'climate'){
+        clim = await loadClimate(h, 'climate');
+        hydro = { time: clim.time, q: deriveRunoff(h, clim) };
+      } else {
+        [hydro, clim] = await Promise.all([
+          loadDischarge(h, mode),
+          loadClimate(h, mode)
+        ]);
+      }
+      h.hydro = hydro; h.clim = clim;
+      S.cache[mode][h.id] = { hydro, clim };
+    } catch(e){
+      console.warn('Ошибка данных', h.name, e);
+      h.failed = true;
+    }
+    done++;
+    setLoad(`Загрузка данных (${mode})… ${done}/${HPPS.length}`);
+  }));
+
+  const ok = HPPS.find(h => S.cache[mode][h.id]);
+  if (!ok){
+    setLoad('⚠ Не удалось загрузить данные. Проверьте интернет.');
+    S.loading = false;
+    return;
+  }
+  S.dates = S.cache[mode][ok.id].hydro.time;
+
+  // таймлайн
+  const sl = document.getElementById('slider');
+  sl.max = S.dates.length - 1;
+  S.idx = Math.floor(S.dates.length / 2);
+  sl.value = S.idx;
+
+  const n = S.dates.length;
+  const fmt = d => mode === 'history' ? d.slice(0,4) : d.slice(0,7);
+  document.getElementById('tickA').textContent = fmt(S.dates[0]);
+  document.getElementById('tickB').textContent = fmt(S.dates[Math.floor(n/2)]);
+  document.getElementById('tickC').textContent = fmt(S.dates[n-1]);
+
+  // первичная отрисовка маркеров
+  HPPS.forEach(h => {
+    if (!S.markers[h.id]){
+      const mk = L.circleMarker([h.lat, h.lon], {
+        radius: 7, color:'#031018', weight:2, fillColor:'#888', fillOpacity:1
+      }).addTo(layerMarkers);
+      mk.on('click', () => selectHPP(h.id));
+      S.markers[h.id] = mk;
+    }
+    const item = document.querySelector(`.hppItem[data-id="${h.id}"]`);
+    if (item){
+      const dot = item.querySelector('.dot');
+      const ok = S.cache[mode][h.id];
+      dot.style.background = ok ? '#3ddc84' : '#555';
+      dot.style.color = ok ? '#3ddc84' : '#555';
+    }
+  });
+
+  recompute();
+  render();
+  if (S.selected){
+    const h = HPPS.find(x => x.id === S.selected);
+    document.getElementById('details').innerHTML = detailsHTML(h);
+    updateChart();
+  }
+
+  document.getElementById('loader').classList.add('hide');
+  setTimeout(() => { document.getElementById('loader').style.display = 'none'; }, 400);
+  S.loading = false;
+}
+
+/* =========================================================================
+   8. ГЕОМЕТРИЯ: ПОЛИГОН ВОДОХРАНИЛИЩА И ВОЛНЫ ЗАТОПЛЕНИЯ
+   ========================================================================= */
+function makeReservoirPolygon(h, radiusM){
+  const pts = [];
+  const N = 40;
+  const R = 6371000;
+  const latR = h.lat * Math.PI / 180;
+  const seed = h.lat * 100 + h.lon;
+  // неравномерность формы из рельефа
+  const irr = 0.25 + 0.30 * Math.min(1, (h.terrain?.ampl || 50) / 400);
+  for (let a = 0; a < N; a++){
+    const ang = a * 2 * Math.PI / N;
+    const noise = 1 + irr * (
+      Math.sin(ang*3 + seed) * 0.55 +
+      Math.sin(ang*5 + seed*1.7) * 0.30 +
+      Math.sin(ang*8 + seed*0.5) * 0.15
+    );
+    const r = radiusM * Math.max(0.45, noise);
+    const dLat = (r * Math.cos(ang)) / R * 180 / Math.PI;
+    const dLon = (r * Math.sin(ang)) / (R * Math.cos(latR)) * 180 / Math.PI;
+    pts.push([h.lat + dLat, h.lon + dLon]);
+  }
+  return pts;
+}
+
+function makeFloodWave(h, progress){
+  if (progress <= 0 || progress >= 1) return null;
+  const maxDist = 70000;           // до 70 км вниз по течению
+  const maxWidth = 18000;
+  const dist  = maxDist * Math.pow(progress, 0.7);
+  const width = maxWidth * Math.min(1, progress * 1.6);
+
+  const dir = (h.flowDir || 180) * Math.PI / 180;
+  const dLat = Math.cos(dir);
+  const dLon = Math.sin(dir);
+  const R = 6371000;
+  const latR = h.lat * Math.PI / 180;
+
+  const pts = [];
+  const N = 32;
+  for (let a = 0; a < N; a++){
+    const ang = a * 2 * Math.PI / N;
+    const along  = dist * (0.5 + 0.5 * Math.cos(ang)) - 3000;
+    const across = width * 0.5 * Math.sin(ang) *
+                   (0.35 + 0.65 * Math.min(1, progress * 2));
+    const px = along * dLat - across * dLon;
+    const py = along * dLon + across * dLat;
+    pts.push([
+      h.lat + px / R * 180 / Math.PI,
+      h.lon + py / (R * Math.cos(latR)) * 180 / Math.PI
+    ]);
+  }
+  return pts;
+}
+
+/* =========================================================================
+   9. ПРОРЫВ ПЛОТИНЫ
+   ========================================================================= */
+function startDamBreak(){
+  if (!S.selected){
+    alert('Сначала выберите ГЭС на карте или в списке');
+    return;
+  }
+  const h = HPPS.find(x => x.id === S.selected);
+  if (!h || !S.cache[S.mode]?.[h.id]){
+    alert('Данные для этой ГЭС недоступны в текущем режиме');
+    return;
+  }
+
+  // сброс предыдущего
+  layerFlood.clearLayers();
+  S.damBreak = { id: h.id, progress: 0, start: performance.now() };
+  document.getElementById('alertBanner').classList.add('show');
+
+  // пересчитываем — мощность = 0, уровень падает
+  recompute();
+
+  function step(t){
+    if (!S.damBreak) return;
+    const elapsed = (t - S.damBreak.start) / 1000;
+    S.damBreak.progress = Math.min(1, elapsed / 9);
+
+    layerFlood.clearLayers();
+    const pts = makeFloodWave(h, S.damBreak.progress);
+    if (pts){
+      const opacity = 0.65 * (1 - S.damBreak.progress * 0.6);
+      L.polygon(pts, {
+        color:'#ff3b3b', weight:2, opacity:0.95,
+        fillColor:'#ff5a5a', fillOpacity:opacity
+      }).addTo(layerFlood)
+        .bindTooltip(`🌊 Волна затопления · ${Math.round(S.damBreak.progress*100)}%`,
+                     {sticky:true});
+    }
+    render();
+
+    if (S.damBreak.progress < 1){
+      requestAnimationFrame(step);
+    } else {
+      // волна «уходит», зона остаётся подсвеченной ещё 4 секунды
+      setTimeout(() => {
+        layerFlood.clearLayers();
+        document.getElementById('alertBanner').classList.remove('show');
+        S.damBreak = null;
+      }, 4500);
+    }
+  }
+  requestAnimationFrame(step);
+}
+
+function stopDamBreak(){
+  S.damBreak = null;
+  layerFlood.clearLayers();
+  document.getElementById('alertBanner').classList.remove('show');
+}
+
+/* =========================================================================
+   10. ИНТЕРФЕЙС
+   ========================================================================= */
+function buildUI(){
+  const list = document.getElementById('hppList');
+  document.getElementById('hppCount').textContent = `(${HPPS.length})`;
+
+  HPPS.forEach(h => {
+    const item = document.createElement('div');
+    item.className = 'hppItem';
+    item.dataset.id = h.id;
+    item.innerHTML = `<div class="dot" style="background:#555;color:#555"></div>
+                      <div class="nm">${h.name}</div>
+                      <div class="mw">${h.capacityMW} МВт</div>`;
+    item.onclick = () => selectHPP(h.id, true);
+    list.appendChild(item);
+  });
+
+  document.getElementById('slider').oninput = (e) => {
+    S.idx = +e.target.value;
+    if (S.scenario === 'flood') recompute();
+    render();
+  };
+  document.getElementById('playBtn').onclick = togglePlay;
+
+  // сценарии
+  document.querySelectorAll('.scenBtn').forEach(btn => {
+    btn.onclick = () => {
+      const sc = btn.dataset.scen;
+      document.querySelectorAll('.scenBtn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      if (sc === 'dam_break'){
+        S.scenario = 'dam_break';
+        startDamBreak();
+      } else {
+        stopDamBreak();
+        S.scenario = sc;
+        recompute();
+        render();
+        if (S.selected){
+          const h = HPPS.find(x => x.id === S.selected);
+          document.getElementById('details').innerHTML = detailsHTML(h);
+          updateChart();
+        }
+      }
+    };
+  });
+
+  // график
+  const ctx = document.getElementById('chart').getContext('2d');
+  S.chart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode:'index', intersect:false },
+      plugins: {
+        legend: { labels:{ color:'#8ba0b6', boxWidth:10, font:{size:10} } },
+        tooltip: {
+          backgroundColor:'rgba(16,22,30,.95)', borderColor:'#2a3644', borderWidth:1,
+          titleColor:'#dbe6f2', bodyColor:'#dbe6f2', padding:8,
+          titleFont:{size:11}, bodyFont:{size:11}
+        }
+      },
+      scales: {
+        x: { ticks:{ color:'#6d8199', maxTicksLimit:7, font:{size:9} },
+             grid:{ color:'rgba(255,255,255,.05)' } },
+        y: { position:'left', ticks:{ color:'#31c9ff', font:{size:9} },
+             grid:{ color:'rgba(255,255,255,.05)' } },
+        y1:{ position:'right', ticks:{ color:'#ffb02e', font:{size:9} },
+             grid:{ drawOnChartArea:false } }
+      }
+    }
+  });
+
+  // режимы
+  document.querySelectorAll('#modeTabs button').forEach(btn => {
+    btn.onclick = async () => {
+      if (S.loading) return;
+      document.querySelectorAll('#modeTabs button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      S.mode = btn.dataset.mode;
+      stopDamBreak();
+      S.scenario = 'normal';
+      document.querySelectorAll('.scenBtn').forEach(b =>
+        b.classList.toggle('active', b.dataset.scen === 'normal'));
+      await loadPeriod(S.mode);
+    };
+  });
+}
+
+/* =========================================================================
+   11. РЕНДЕР
+   ========================================================================= */
+function render(){
+  const i = S.idx;
+  if (!S.dates[i]) return;
+  document.getElementById('dateBox').textContent =
+    S.dates[i].split('-').reverse().join('.');
+  document.getElementById('slider').value = i;
+
+  HPPS.forEach(h => {
+    const r = S.results[h.id];
+    const mk = S.markers[h.id];
+    if (!mk) return;
+
+    if (!r){
+      mk.setStyle({ fillColor:'#555', color:'#031018', opacity:.6, fillOpacity:.6 });
+      mk.setRadius(5);
+      mk.bindPopup(`<h4>${h.name}</h4><div style="color:#8ba0b6">Данные недоступны</div>`);
+      // убираем полигон, если был
+      if (S.polygons[h.id]){ layerReservoirs.removeLayer(S.polygons[h.id]); delete S.polygons[h.id]; }
+      return;
+    }
+
+    const lf  = r.lf[i];
+    const lvl = r.level[i];
+    const overtop = lvl > h.nmu - 0.15;             // близко к НПУ
+    const isBroken = (S.scenario === 'dam_break' && S.selected === h.id);
+
+    // цвет маркера
+    let col;
+    if (isBroken) col = '#ff3b3b';
+    else if (overtop) col = '#ff3b3b';
+    else col = lf > 0.75 ? '#3ddc84' : lf > 0.45 ? '#a8e05f' :
+              lf > 0.20 ? '#ffb02e' : lf > 0.05 ? '#ff8a3d' : '#ff6b6b';
+
+    mk.setStyle({ fillColor: col, color:'#031018', opacity:1, fillOpacity:1 });
+    mk.setRadius(5 + 9 * Math.sqrt(Math.max(lf, 0)));
+    mk.bindPopup(popupHTML(h, r, i, col, isBroken, overtop), { maxWidth: 320 });
+
+    /* --- полигон водохранилища --- */
+    const areaKm2 = r.area[i];
+    if (isBroken){
+      // после прорыва — чаша почти пуста
+      if (S.polygons[h.id]){
+        S.polygons[h.id].setStyle({ opacity:0.25, fillOpacity:0.04, color:'#ff6b6b' });
+      }
+      return;
+    }
+
+    const radiusM = Math.sqrt(areaKm2 / Math.PI) * 1000;
+    const pts = makeReservoirPolygon(h, radiusM);
+
+    // цвет по состоянию: голубой в норме, оранжевый при переполнении, красный при угрозе
+    let rc, fc, fo;
+    if (overtop){         rc = '#ff3b3b'; fc = '#ff6b6b'; fo = 0.28; }
+    else if (lf > 0.75){  rc = '#31c9ff'; fc = '#31c9ff'; fo = 0.16; }
+    else {                rc = '#31c9ff'; fc = '#31c9ff'; fo = 0.10; }
+
+    if (S.polygons[h.id]){
+      S.polygons[h.id].setLatLngs(pts);
+      S.polygons[h.id].setStyle({ color: rc, fillColor: fc, fillOpacity: fo });
+    } else {
+      S.polygons[h.id] = L.polygon(pts, {
+        color: rc, weight:1, opacity:.65,
+        fillColor: fc, fillOpacity: fo, interactive:false
+      }).addTo(layerReservoirs);
+    }
+  });
+
+  if (S.selected) updateChart();
+  if (S.playing) S.idx = (S.idx + 1) % S.dates.length;
+}
+
+function popupHTML(h, r, i, col, isBroken, overtop){
+  const P = r.power[i], lf = r.lf[i] * 100;
+  const status = isBroken ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">💥 ПЛОТИНА РАЗРУШЕНА</div>'
+              : overtop    ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">⚠ УРОВЕНЬ КРИТИЧЕСКИЙ</div>'
+              : '';
+  return `
+  <h4>${h.name}</h4>
+  <div style="color:#8ba0b6;margin-bottom:8px">р. ${h.river} · ${h.capacityMW} МВт · с ${h.year}</div>
+  ${status}
+  <div class="kv"><span>Мощность</span><span style="color:${col};font-weight:700">${P.toFixed(0)} МВт</span></div>
+  <div class="kv"><span>Загрузка</span><span>${lf.toFixed(1)} %</span></div>
+  <div class="kv"><span>Уровень ВБ</span><span>${r.level[i].toFixed(2)} м (НПУ ${h.nmu})</span></div>
+  <div class="kv"><span>Напор</span><span>${r.head[i].toFixed(1)} м</span></div>
+  <div class="kv"><span>Расход через створ</span><span>${r.flow[i].toFixed(0)} м³/с</span></div>
+  <div class="kv"><span>Сброс</span><span>${r.spill[i].toFixed(0)} м³/с</span></div>
+  <div class="kv"><span>Зеркало</span><span>${r.area[i].toFixed(0)} км²</span></div>`;
+}
+
+/* =========================================================================
+   12. ВЫБОР ГЭС И ГРАФИК
+   ========================================================================= */
+function selectHPP(id, fromList){
+  S.selected = id;
+  const h = HPPS.find(x => x.id === id);
+
+  document.querySelectorAll('.hppItem').forEach(el =>
+    el.classList.toggle('active', el.dataset.id === id));
+
+  document.getElementById('details').innerHTML = detailsHTML(h);
+  document.getElementById('chartPanel').classList.add('show');
+  document.getElementById('chartTitle').textContent = h.name;
+  document.getElementById('chartSub').textContent = `р. ${h.river}`;
+
+  if (fromList) map.setView([h.lat, h.lon], 8, { animate:true });
+  S.markers[id]?.openPopup();
+
+  if (S.scenario === 'dam_break') startDamBreak();
+  else { recompute(); updateChart(); render(); }
+}
+
+function detailsHTML(h){
+  const r = S.results[h.id];
+  if (!r) return `<h3>${h.name}</h3><p style="color:#ff6b6b">Данные недоступны</p>`;
+  const i = S.idx;
+  const isBroken = (S.scenario === 'dam_break' && S.selected === h.id);
+  const overtop  = r.level[i] > h.nmu - 0.15;
+  return `
+  <h3>${h.name}</h3>
+  ${isBroken ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">💥 ПЛОТИНА РАЗРУШЕНА</div>' : ''}
+  ${overtop && !isBroken ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">⚠ КРИТИЧЕСКИЙ УРОВЕНЬ</div>' : ''}
+  <div class="kv"><span>Река</span><span>${h.river}</span></div>
+  <div class="kv"><span>Мощность установленная</span><span>${h.capacityMW} МВт</span></div>
+  <div class="kv"><span>Расчётный напор</span><span>${h.head} м</span></div>
+  <div class="kv"><span>НПУ / УМО</span><span>${h.nmu} / ${h.umo} м</span></div>
+  <div class="kv"><span>Площадь при НПУ</span><span>${h.areaNMU} км²</span></div>
+  <div class="kv"><span>Полный объём</span><span>${h.totalVolume} км³</span></div>
+  <div class="kv"><span>Полезный объём</span><span>${h.usefulVolume} км³</span></div>
+  <div class="kv"><span>Показатель формы ложа</span><span>${r.p1.toFixed(2)}</span></div>
+  ${h.terrain ? `<div class="kv"><span>Отметка створа (DEM)</span><span>${h.terrain.dam.toFixed(0)} м</span></div>
+  <div class="kv"><span>Амплитуда рельефа</span><span>${h.terrain.ampl.toFixed(0)} м</span></div>` : ''}
+  <div class="kv ${overtop?'danger':''}"><span>Текущий уровень</span><span>${r.level[i].toFixed(2)} м</span></div>
+  <div class="kv ${overtop?'danger':''}"><span>Текущая мощность</span><span>${r.power[i].toFixed(0)} МВт</span></div>
+  <div class="kv"><span>Выработка (за период)</span><span>${(r.kwh/1e9).toFixed(1)} млрд кВт·ч</span></div>`;
+}
+
+function updateChart(){
+  if (!S.selected || !S.chart) return;
+  const now = performance.now();
+  if (now - S.lastChartUpdate < 60) return;
+  S.lastChartUpdate = now;
+
+  const r = S.results[S.selected];
+  const h = HPPS.find(x => x.id === S.selected);
+  if (!r) return;
+  const i = S.idx, W = 400;
+  const a = Math.max(0, i - W), b = Math.min(S.dates.length, i + W);
+
+  const labels = [], pw = [], lv = [], qq = [];
+  for (let k = a; k < b; k++){
+    labels.push(S.dates[k].slice(5));
+    pw.push(+r.power[k].toFixed(1));
+    lv.push(+r.level[k].toFixed(2));
+    const c = S.cache[S.mode]?.[S.selected];
+    qq.push(c ? +(c.hydro.q[k] || 0).toFixed(0) : 0);
+  }
+
+  S.chart.data.labels = labels;
+  S.chart.data.datasets = [
+    { label:'Мощность, МВт', data:pw, borderColor:'#31c9ff',
+      backgroundColor:'rgba(49,201,255,.12)', borderWidth:1.6,
+      pointRadius:0, fill:true, yAxisID:'y', tension:.25 },
+    { label:'Уровень ВБ, м', data:lv, borderColor:'#ffb02e',
+      borderWidth:1.4, pointRadius:0, yAxisID:'y1', tension:.25 },
+    { label:'Приток, м³/с', data:qq, borderColor:'#3ddc84',
+      borderWidth:1, borderDash:[3,3], pointRadius:0, yAxisID:'y1',
+      tension:.25, hidden:true }
+  ];
+  S.chart.update('none');
+}
+
+/* =========================================================================
+   13. АНИМАЦИЯ
+   ========================================================================= */
+function togglePlay(){
+  S.playing = !S.playing;
+  document.getElementById('playBtn').textContent = S.playing ? '❚❚' : '▶';
+  if (S.playing) loop();
+}
+
+let acc = 0, last = 0;
+function loop(t){
+  if (!S.playing) return;
+  if (!last) last = t;
+  const dt = t - last; last = t;
+  const step = +document.getElementById('speed').value;
+  acc += dt;
+  if (acc > step * 16){
+    acc = 0;
+    S.idx = (S.idx + 1) % S.dates.length;
+    if (S.scenario === 'flood') recompute();
+    render();
+  }
+  requestAnimationFrame(loop);
+}
+
+/* =========================================================================
+   СТАРТ
+   ========================================================================= */
+(async function boot(){
+  try {
+    await loadTerrain();
+    buildUI();
+    await loadPeriod('history');
+  } catch(e){
+    setLoad('⚠ Ошибка инициализации: ' + e.message);
+  }
+})();
+</script>
+</body>
+</html>
