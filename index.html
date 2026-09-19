@@ -139,7 +139,7 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
   <button data-mode="climate">🌍 Климат</button>
 </div>
 
-<div id="alertBanner">💥 ПРОРЫВ ПЛОТИНЫ — распространение волны</div>
+<div id="alertBanner">💥 ПРОРЫВ ПЛОТИНЫ</div>
 <div id="statusBar"><b>Статус:</b> <span id="statusText">инициализация…</span></div>
 
 <aside id="sidebar">
@@ -184,8 +184,6 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
 <script>
 /* ============================================================
    1. ПАСПОРТНЫЕ ДАННЫЕ ГЭС
-   terrainAmpl — оценка амплитуды рельефа вокруг станции, м.
-   Влияет на тип волны прорыва: горная / предгорная / равнинная.
    ============================================================ */
 const HPPS = [
   {id:'volzh', name:'Волжская ГЭС', river:'Волга', lat:48.8253, lon:44.6806, flowDir:180,
@@ -262,6 +260,10 @@ const S = {
   damBreak: null
 };
 
+/* Глобальное состояние анимации таймлайна */
+let animAcc = 0;
+let animLast = 0;
+
 /* ============================================================
    4. УТИЛИТЫ
    ============================================================ */
@@ -307,9 +309,9 @@ async function fetchWithRetry(url, ms = 15000, tries = 2){
 }
 
 /* ============================================================
-   5. КЭШ В LOCALSTORAGE
+   5. КЭШ
    ============================================================ */
-const CACHE_KEY = 'ges_cache_v7';
+const CACHE_KEY = 'ges_cache_v8';
 const TTL = { history: 12*3600*1000, forecast: 30*60*1000, climate: 7*24*3600*1000 };
 
 function readCacheAll(){
@@ -654,7 +656,7 @@ async function loadPeriod(mode){
 }
 
 /* ============================================================
-   10. ГЕОМЕТРИЯ ВОДОХРАНИЛИЩА
+   10. ВОДОХРАНИЛИЩЕ
    ============================================================ */
 function makeReservoirPolygon(h, radiusM){
   const pts = [], N = 40, R = 6371000;
@@ -677,111 +679,135 @@ function makeReservoirPolygon(h, radiusM){
 }
 
 /* ============================================================
-   11. ВОЛНА ПРОРЫВА — УЛУЧШЕННАЯ МОДЕЛЬ
+   11. ВОЛНА ПРОРЫВА — ИЗВИЛИСТАЯ ПОЛОСА ВДОЛЬ РУСЛА
    ------------------------------------------------------------
-   Возвращает массив колец, каждое — отдельный полигон.
-   Внешнее кольцо = фронт волны (ярче).
-   Внутренние = уже осевшая вода (прозрачнее).
-
-   Параметры волны зависят от terrainAmpl:
-     > 300 м  → горная    — быстро, узко, далеко (ущелье)
-     > 150 м  → предгорная — средне
-     ≤ 150 м  → равнинная  — медленно, широко (пойма)
+   Строим:
+     1) центральную линию — ломаную от плотины в направлении
+        flowDir, с извилистостью (несколько синусоид);
+     2) вокруг неё — полосу заданной ширины (нормаль к линии).
+   Никаких эллипсов и поворотов — линия реально «петляет».
    ============================================================ */
 function getWaveParams(h){
   const ampl = h.terrainAmpl || 100;
 
   if (ampl > 300){
-    return {
-      type: 'горная',
-      maxDist: 90000,      // 90 км — вода уходит далеко по ущелью
-      maxWidth: 9000,      // 9 км — узкая долина
-      speedMs: 15,         // 15 м/с — быстро
-      baseDuration: 8,     // анимация 8 секунд
-      ringCount: 3,        // мало колец — узкая волна
-      roughness: 0.45,
-      description: 'Узкая быстрая волна вдоль ущелья'
-    };
+    return { type:'горная', maxDist:90000, maxWidth:9000, speedMs:15,
+             baseDuration:8, ringCount:3, description:'Узкая быстрая волна вдоль ущелья' };
   }
   if (ampl > 150){
-    return {
-      type: 'предгорная',
-      maxDist: 80000,
-      maxWidth: 14000,
-      speedMs: 8,
-      baseDuration: 10,
-      ringCount: 4,
-      roughness: 0.55,
-      description: 'Волна средней ширины, быстрый сход'
-    };
+    return { type:'предгорная', maxDist:80000, maxWidth:14000, speedMs:8,
+             baseDuration:10, ringCount:4, description:'Волна средней ширины' };
   }
-  return {
-    type: 'равнинная',
-    maxDist: 130000,       // 130 км — широкая пойма
-    maxWidth: 28000,       // 28 км — растекается по равнине
-    speedMs: 3,            // 3 м/с — медленно
-    baseDuration: 12,
-    ringCount: 5,
-    roughness: 0.7,
-    description: 'Широкая медленная волна, большое затопление'
-  };
+  return { type:'равнинная', maxDist:130000, maxWidth:28000, speedMs:3,
+           baseDuration:12, ringCount:5, description:'Широкая медленная волна по пойме' };
 }
 
-/* Одно кольцо волны */
-function makeWaveRing(h, dist, width, ringProgress, params){
-  const pts = [], N = 48, R = 6371000;
-  const latR = h.lat * Math.PI / 180;
-
-  // Искривление русла — небольшой изгиб в зависимости от прогресса
-  const curve = Math.sin(ringProgress * Math.PI) * 0.18;
+/* Извилистая центральная линия от плотины */
+function makeWaveCenterline(h, maxDistM){
+  const points = [[h.lat, h.lon]];
+  const n = 60;
+  const step = maxDistM / n;
   const baseDir = (h.flowDir || 180) * Math.PI / 180;
-  const dir = baseDir + curve;
+  const R = 6371000;
+  const latR = h.lat * Math.PI / 180;
+  const seed = h.lat * 100 + h.lon;
 
-  const dLat = Math.cos(dir);
-  const dLon = Math.sin(dir);
+  let lat = h.lat, lon = h.lon;
 
-  const startOffset = -2000;    // волна начинается чуть выше плотины
+  for (let i = 1; i <= n; i++){
+    const t = i / n;
+    /* Сумма трёх синусоид — медленные, средние и быстрые изгибы */
+    const meander =
+      Math.sin(t * Math.PI * 3 + seed)        * 0.30 +
+      Math.sin(t * Math.PI * 7 + seed * 1.7)  * 0.15 +
+      Math.sin(t * Math.PI * 13 + seed * 2.3) * 0.07;
+    const dir = baseDir + meander;
 
-  for (let a = 0; a < N; a++){
-    const ang = a * 2 * Math.PI / N;
+    const dLat = step * Math.cos(dir);
+    const dLon = step * Math.sin(dir);
 
-    const along = startOffset + dist * (0.5 + 0.5 * Math.cos(ang));
-    // Ширина увеличивается с прогрессом
-    const widthFactor = 0.35 + 0.65 * Math.min(1, ringProgress * 2);
-    const across = width * 0.5 * Math.sin(ang) * widthFactor;
-
-    // Поворот вектора на направление течения
-    const px = along * dLat - across * dLon;
-    const py = along * dLon + across * dLat;
-
-    pts.push([
-      h.lat + px / R * 180 / Math.PI,
-      h.lon + py / (R * Math.cos(latR)) * 180 / Math.PI
-    ]);
+    lat += dLat / R * 180 / Math.PI;
+    lon += dLon / (R * Math.cos(latR)) * 180 / Math.PI;
+    points.push([lat, lon]);
   }
-  return pts;
+  return points;
 }
 
-/* Все кольца волны */
+/* Полоса вокруг центральной линии — полигон */
+function makeBandPolygon(centerline, widthM, latRef){
+  const R = 6371000;
+  const latR = latRef * Math.PI / 180;
+  const degLat = 180 / (Math.PI * R);
+  const degLon = 180 / (Math.PI * R * Math.cos(latR));
+
+  const left = [], right = [];
+  const n = centerline.length;
+
+  for (let i = 0; i < n; i++){
+    let dLat, dLon;
+    if (i === 0){
+      dLat = centerline[1][0] - centerline[0][0];
+      dLon = centerline[1][1] - centerline[0][1];
+    } else if (i === n - 1){
+      dLat = centerline[i][0] - centerline[i-1][0];
+      dLon = centerline[i][1] - centerline[i-1][1];
+    } else {
+      dLat = centerline[i+1][0] - centerline[i-1][0];
+      dLon = centerline[i+1][1] - centerline[i-1][1];
+    }
+
+    /* Перевод направления в метры */
+    const dxM = dLon / degLon;
+    const dyM = dLat / degLat;
+    const lenM = Math.hypot(dxM, dyM) || 1;
+
+    /* Единичная нормаль в метрах */
+    const nxM = -dyM / lenM;
+    const nyM =  dxM / lenM;
+
+    const halfW = widthM / 2;
+    const offLat = nyM * halfW * degLat;
+    const offLon = nxM * halfW * degLon;
+
+    left.push([centerline[i][0] + offLat, centerline[i][1] + offLon]);
+    right.push([centerline[i][0] - offLat, centerline[i][1] - offLon]);
+  }
+
+  return [...left, ...right.reverse()];
+}
+
+/* Волна как набор полос-колец вдоль центральной линии */
 function makeFloodWave(h, progress){
   if (progress <= 0 || progress >= 1) return null;
 
   const params = getWaveParams(h);
+  const maxDist  = params.maxDist  * Math.pow(progress, 0.7);
+  const maxWidth = params.maxWidth * Math.min(1, progress * 1.6);
+
+  const centerline = makeWaveCenterline(h, maxDist);
+  const n = centerline.length;
+
   const rings = [];
-
   for (let k = 1; k <= params.ringCount; k++){
-    const ringProgress = progress * (k / params.ringCount);
-    if (ringProgress <= 0.02) continue;
+    const tStart = (k - 1) / params.ringCount;
+    const tEnd   = k / params.ringCount;
+    const midT   = (tStart + tEnd) / 2;
 
-    const dist  = params.maxDist  * Math.pow(ringProgress, 0.7);
-    const width = params.maxWidth * Math.min(1, ringProgress * 1.6);
-    const pts   = makeWaveRing(h, dist, width, ringProgress, params);
+    /* Ширина полосы растёт к фронту */
+    const width = maxWidth * (0.35 + 0.65 * midT);
 
-    // Внутренние кольца — бледнее, внешние (фронт) — ярче
-    const ringFrac = k / params.ringCount;
-    const opacity  = 0.08 + 0.35 * ringFrac;
+    /* Отрезаем часть центральной линии для этого кольца */
+    const iStart = Math.max(0, Math.floor(n * tStart));
+    const iEnd   = Math.min(n - 1, Math.ceil(n * tEnd));
+    const segment = centerline.slice(iStart, iEnd + 1);
+    if (segment.length < 2) continue;
 
-    rings.push({ pts, opacity, k, dist, width });
+    const pts = makeBandPolygon(segment, width, h.lat);
+
+    /* Внешние кольца ярче — там фронт */
+    const opacity = 0.10 + 0.32 * (k / params.ringCount);
+
+    rings.push({ pts, opacity, k });
   }
 
   return { rings, params };
@@ -808,11 +834,8 @@ function startDamBreak(){
     `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · до ${(params.maxDist/1000).toFixed(0)} км`;
   $('alertBanner').classList.add('show');
 
-  // Один раз обнуляем — вода ушла, мощность = 0
   recompute();
   render();
-
-  // Обновляем панель деталей, чтобы показать параметры волны
   $('details').innerHTML = detailsHTML(h);
 
   function step(t){
@@ -824,7 +847,8 @@ function startDamBreak(){
 
     const wave = makeFloodWave(h, S.damBreak.progress);
     if (wave){
-      const globalFade = 1 - S.damBreak.progress * 0.5;   // общее затухание
+      const globalFade = 1 - S.damBreak.progress * 0.5;
+
       wave.rings.forEach(ring => {
         L.polygon(ring.pts, {
           color: '#ff3b3b',
@@ -836,15 +860,12 @@ function startDamBreak(){
         }).addTo(layerFlood);
       });
 
-      // Отдельная яркая линия фронта
+      /* Яркая линия по фронту */
       const front = wave.rings[wave.rings.length - 1];
       if (front){
         L.polygon(front.pts, {
-          color: '#ff1a1a',
-          weight: 3,
-          opacity: 0.95,
-          fillOpacity: 0,
-          interactive: false
+          color: '#ff1a1a', weight: 3, opacity: 0.95,
+          fillOpacity: 0, interactive: false
         }).addTo(layerFlood);
       }
     }
@@ -854,7 +875,6 @@ function startDamBreak(){
     if (S.damBreak.progress < 1){
       requestAnimationFrame(step);
     } else {
-      // Волна ушла, зона остаётся на 6 секунд
       setTimeout(() => {
         layerFlood.clearLayers();
         $('alertBanner').classList.remove('show');
@@ -1071,7 +1091,6 @@ function detailsHTML(h){
     : src === 'cache' ? '<span style="color:#ffb02e">🟡 из кэша</span>'
     : '<span style="color:#ff6b6b">🔴 офлайн-режим (демо)</span>';
 
-  // Информация о волне прорыва
   const wp = getWaveParams(h);
   const waveBlock = `
   <div style="margin-top:8px;padding:8px 10px;background:rgba(255,59,59,.08);
@@ -1140,23 +1159,37 @@ function updateChart(){
 }
 
 /* ============================================================
-   16. АНИМАЦИЯ
+   16. АНИМАЦИЯ — ИСПРАВЛЕНО
+   ------------------------------------------------------------
+   Было: togglePlay вызывал loop() напрямую → t = undefined →
+         dt = NaN → acc = NaN → таймер навсегда сломан.
+   Стало: запуск через requestAnimationFrame, t всегда число.
    ============================================================ */
 function togglePlay(){
+  if (!S.dates.length) return;
+
   S.playing = !S.playing;
   $('playBtn').textContent = S.playing ? '❚❚' : '▶';
-  if (S.playing) loop();
+
+  if (S.playing){
+    animAcc = 0;
+    animLast = 0;
+    requestAnimationFrame(loop);
+  }
 }
 
-let acc = 0, last = 0;
 function loop(t){
   if (!S.playing) return;
-  if (!last) last = t;
-  const dt = t - last; last = t;
-  const step = +$('speed').value;
-  acc += dt;
-  if (acc > step * 16){
-    acc = 0;
+
+  if (!animLast) animLast = t;
+  const dt = t - animLast;
+  animLast = t;
+
+  animAcc += dt;
+
+  const speed = +$('speed').value;
+  if (animAcc > speed * 16){
+    animAcc = 0;
     S.idx = (S.idx + 1) % S.dates.length;
     if (S.scenario === 'flood') recompute();
     render();
