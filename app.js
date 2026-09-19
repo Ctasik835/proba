@@ -1,44 +1,43 @@
 /* ============================================================
    ПАСПОРТНЫЕ ДАННЫЕ ГЭС
-   flowDir — направление течения, град (0=С, 90=В, 180=Ю).
+   flowDir — направление течения вниз по реке (0=С, 90=В, 180=Ю).
    ============================================================ */
 const HPPS = [
-  {id:'volzh', name:'Волжская ГЭС', river:'Волга', lat:48.8253, lon:44.6806, flowDir:175,
+  {id:'volzh', name:'Волжская ГЭС', river:'Волга', lat:48.8253, lon:44.6806, flowDir:180,
    capacityMW:2671, head:20, nmu:15, umo:12.5, areaNMU:3117, totalVolume:31.5, usefulVolume:6.5,
    eff:.93, year:1961, terrainAmpl:80, reservoirName:'Волгоградское'},
-  {id:'zhig', name:'Жигулёвская ГЭС', river:'Волга', lat:53.4269, lon:49.4289, flowDir:185,
+  {id:'zhig', name:'Жигулёвская ГЭС', river:'Волга', lat:53.4269, lon:49.4289, flowDir:90,
    capacityMW:2488, head:21, nmu:53, umo:49, areaNMU:6450, totalVolume:58, usefulVolume:21,
    eff:.93, year:1957, terrainAmpl:150, reservoirName:'Куйбышевское'},
-  {id:'sar', name:'Саратовская ГЭС', river:'Волга', lat:52.0278, lon:47.7931, flowDir:205,
+  {id:'sar', name:'Саратовская ГЭС', river:'Волга', lat:52.0278, lon:47.7931, flowDir:200,
    capacityMW:1403, head:15, nmu:28, umo:25, areaNMU:1831, totalVolume:12.9, usefulVolume:4.5,
    eff:.92, year:1968, terrainAmpl:60, reservoirName:'Саратовское'},
-  {id:'cheb', name:'Чебоксарская ГЭС', river:'Волга', lat:56.1358, lon:47.4647, flowDir:100,
+  {id:'cheb', name:'Чебоксарская ГЭС', river:'Волга', lat:56.1358, lon:47.4647, flowDir:90,
    capacityMW:1370, head:14, nmu:63, umo:61, areaNMU:2182, totalVolume:13.8, usefulVolume:3.6,
    eff:.92, year:1986, terrainAmpl:70, reservoirName:'Чебоксарское'},
-  {id:'nnov', name:'Нижегородская ГЭС', river:'Волга', lat:56.6419, lon:43.4911, flowDir:110,
+  {id:'nnov', name:'Нижегородская ГЭС', river:'Волга', lat:56.6419, lon:43.4911, flowDir:100,
    capacityMW:530, head:16, nmu:84, umo:81, areaNMU:1590, totalVolume:8.7, usefulVolume:3.9,
    eff:.91, year:1956, terrainAmpl:60, reservoirName:'Горьковское'},
   {id:'votk', name:'Воткинская ГЭС', river:'Кама', lat:56.9264, lon:53.9261, flowDir:190,
    capacityMW:1100, head:18, nmu:89, umo:86, areaNMU:1120, totalVolume:9.4, usefulVolume:2.8,
    eff:.92, year:1963, terrainAmpl:100, reservoirName:'Воткинское'},
-  {id:'kam', name:'Камская ГЭС', river:'Кама', lat:58.1139, lon:56.3297, flowDir:210,
+  {id:'kam', name:'Камская ГЭС', river:'Кама', lat:58.1139, lon:56.3297, flowDir:200,
    capacityMW:552, head:17, nmu:108.5, umo:103.5, areaNMU:1910, totalVolume:12.2, usefulVolume:7.9,
    eff:.91, year:1958, terrainAmpl:120, reservoirName:'Камское'},
   {id:'ssh', name:'Саяно-Шушенская ГЭС', river:'Енисей', lat:52.8267, lon:91.3703, flowDir:0,
    capacityMW:6400, head:194, nmu:540, umo:500, areaNMU:621, totalVolume:31.3, usefulVolume:15.3,
    eff:.94, year:1985, terrainAmpl:900, reservoirName:'Саяно-Шушенское'},
-  {id:'kras', name:'Красноярская ГЭС', river:'Енисей', lat:55.9333, lon:92.3000, flowDir:355,
+  {id:'kras', name:'Красноярская ГЭС', river:'Енисей', lat:55.9333, lon:92.3000, flowDir:0,
    capacityMW:6000, head:93, nmu:243, umo:225, areaNMU:2000, totalVolume:73.3, usefulVolume:20,
    eff:.94, year:1972, terrainAmpl:400, reservoirName:'Красноярское'},
-  {id:'bratsk', name:'Братская ГЭС', river:'Ангара', lat:56.2833, lon:101.7667, flowDir:350,
+  {id:'bratsk', name:'Братская ГЭС', river:'Ангара', lat:56.2833, lon:101.7667, flowDir:10,
    capacityMW:4500, head:100, nmu:402, umo:392, areaNMU:5470, totalVolume:169.3, usefulVolume:48,
    eff:.94, year:1967, terrainAmpl:350, reservoirName:'Братское'}
 ];
 
-/* Приоритет загрузки — сначала крупные ГЭС */
 const PRIORITY = ['ssh', 'kras', 'bratsk', 'volzh', 'zhig'];
 const HISTORY_START = '2023-01-01';
-const CHART_WINDOW = 60;        // ±60 дней вокруг курсора
+const CHART_WINDOW = 60;
 const CHART_THROTTLE_MS = 80;
 
 /* ============================================================
@@ -119,26 +118,6 @@ function trimCourse(c, maxLen){
   return out;
 }
 
-function closestOnSegment(p, a, b){
-  const ax=a[0], ay=a[1], bx=b[0], by=b[1];
-  const dx=bx-ax, dy=by-ay;
-  const len2 = dx*dx + dy*dy;
-  if (len2 < 1e-12) return { t:0, point:[ax,ay], dist:haversineM(p[0],p[1],ax,ay) };
-  let t = ((p[0]-ax)*dx + (p[1]-ay)*dy) / len2;
-  t = Math.max(0, Math.min(1, t));
-  const px = ax + t*dx, py = ay + t*dy;
-  return { t, point:[px,py], dist:haversineM(p[0],p[1],px,py) };
-}
-
-function closestOnLine(p, line){
-  let best={ dist:Infinity, idx:0, point:null };
-  for (let i=0;i<line.length-1;i++){
-    const r = closestOnSegment(p, line[i], line[i+1]);
-    if (r.dist < best.dist) best = { dist:r.dist, idx:i, point:r.point };
-  }
-  return best;
-}
-
 async function fetchWithTimeout(url, ms=15000, opts={}){
   const ctrl=new AbortController();
   const timer=setTimeout(()=>ctrl.abort(), ms);
@@ -162,61 +141,48 @@ async function fetchWithRetry(url, ms=15000, tries=2){
 /* ============================================================
    КЭШ
    ============================================================ */
-const CACHE_KEY = 'ges_cache_v14';
-const RIVER_KEY_PREFIX = 'ges_river_v5_';
-const RES_KEY_PREFIX   = 'ges_res_v5_';
+const CACHE_KEY = 'ges_cache_v15';
+const RIVER_KEY_PREFIX = 'ges_river_v6_';
+const RES_KEY_PREFIX   = 'ges_res_v6_';
 const TTL = { history:12*3600*1000, forecast:30*60*1000, climate:7*24*3600*1000 };
 
 function readCacheAll(){ try{return JSON.parse(localStorage.getItem(CACHE_KEY)||'{}');}catch(e){return{};} }
 function writeCacheAll(o){
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(o)); }
   catch(e){
-    // Если места нет — удаляем самое старое
     try {
       const keys = Object.keys(o);
-      if (keys.length > 1){
-        delete o[keys[0]];
-        localStorage.setItem(CACHE_KEY, JSON.stringify(o));
-      } else {
-        localStorage.removeItem(CACHE_KEY);
-      }
+      if (keys.length > 1){ delete o[keys[0]]; localStorage.setItem(CACHE_KEY, JSON.stringify(o)); }
+      else localStorage.removeItem(CACHE_KEY);
     } catch(_){}
   }
 }
 function getCached(mode,id){
-  const a=readCacheAll();
-  const e=a[mode]?.[id];
+  const a=readCacheAll(); const e=a[mode]?.[id];
   if(!e) return null;
   if(Date.now()-e.ts > TTL[mode]) return null;
   return e.data;
 }
 function getStaleCached(mode,id){
-  const a=readCacheAll();
-  const e=a[mode]?.[id];
+  const a=readCacheAll(); const e=a[mode]?.[id];
   return e ? e.data : null;
 }
 function compressData(data){
   return {
-    hydro: {
-      time: data.hydro.time,
-      q: data.hydro.q.map(v => (v == null ? null : Math.round(v)))
-    },
-    clim: {
-      time: data.clim.time,
-      t: data.clim.t.map(v => (v == null ? null : Math.round(v * 10) / 10)),
-      p: data.clim.p.map(v => (v == null ? null : Math.round(v * 10) / 10))
-    }
+    hydro: { time: data.hydro.time, q: data.hydro.q.map(v => v==null?null:Math.round(v)) },
+    clim: { time: data.clim.time,
+      t: data.clim.t.map(v => v==null?null:Math.round(v*10)/10),
+      p: data.clim.p.map(v => v==null?null:Math.round(v*10)/10) }
   };
 }
 function setCached(mode,id,data){
-  const a=readCacheAll();
-  if(!a[mode]) a[mode]={};
+  const a=readCacheAll(); if(!a[mode]) a[mode]={};
   a[mode][id]={ ts:Date.now(), data: compressData(data) };
   writeCacheAll(a);
 }
 
 /* ============================================================
-   ПРОВЕРКА ДОСТУПНОСТИ API
+   ПРОВЕРКА API
    ============================================================ */
 async function pingAPI(){
   try {
@@ -226,7 +192,7 @@ async function pingAPI(){
     apiAvailable = true;
   } catch(e){
     apiAvailable = false;
-    console.warn('Open-Meteo недоступен, работаем на кэше/синтетике');
+    console.warn('Open-Meteo недоступен');
   }
 }
 
@@ -239,12 +205,12 @@ const OVERPASS_MIRRORS = [
   'https://overpass.private.coffee/api/interpreter'
 ];
 
-async function overpassQuery(query){
+async function overpassQuery(query, timeoutMs = 18000){
   let lastErr;
   for (const m of OVERPASS_MIRRORS){
     try {
       const ctrl=new AbortController();
-      const t=setTimeout(()=>ctrl.abort(), 25000);
+      const t=setTimeout(()=>ctrl.abort(), timeoutMs);
       const r=await fetch(m, {
         method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
@@ -260,88 +226,122 @@ async function overpassQuery(query){
 }
 
 /* ============================================================
-   РУСЛО РЕКИ
+   РУСЛО — с ГАРАНТИРОВАННЫМ ФОЛБЭКОМ
    ============================================================ */
+
+/* Фолбэк: извилистая линия в направлении flowDir.
+   ВСЕГДА возвращает валидный курс. */
+function makeFallbackCourse(h, maxDistM){
+  const points = [[h.lat, h.lon]];
+  const n = 80;
+  const step = maxDistM / n;
+  const baseDir = (h.flowDir || 180) * Math.PI / 180;
+  const R = 6371000;
+  const latR = h.lat * Math.PI / 180;
+  const seed = h.lat * 37 + h.lon * 11;
+
+  let lat = h.lat, lon = h.lon;
+
+  for (let i = 1; i <= n; i++){
+    const t = i / n;
+    /* Меандр: 3 синусоиды разной частоты, амплитуда до ±0.7 рад (~40°) */
+    const meander =
+      Math.sin(t * Math.PI * 2.5 + seed)        * 0.55 +
+      Math.sin(t * Math.PI * 5.7 + seed * 1.3)  * 0.30 +
+      Math.sin(t * Math.PI * 11  + seed * 2.1)  * 0.15;
+
+    const dir = baseDir + meander;
+    const dLat = step * Math.cos(dir);
+    const dLon = step * Math.sin(dir);
+
+    lat += dLat / R * 180 / Math.PI;
+    lon += dLon / (R * Math.cos(latR)) * 180 / Math.PI;
+    points.push([lat, lon]);
+  }
+  return points;
+}
+
 async function loadRiverCourse(h){
+  /* 1. Кэш */
   const key = RIVER_KEY_PREFIX + h.id;
   try {
     const raw = localStorage.getItem(key);
     if (raw){
       const c = JSON.parse(raw);
       if (Date.now()-c.ts < 30*24*3600*1000 && Array.isArray(c.course) && c.course.length >= 3){
+        console.log(`Русло ${h.name} — из кэша (${c.course.length} точек)`);
         return c.course;
       }
     }
   } catch(e){}
 
-  const query = `[out:json][timeout:25];
-way["waterway"~"river|canal"](around:80000,${h.lat},${h.lon});
+  /* 2. Пытаемся получить из OSM */
+  let osmCourse = null;
+  try {
+    const query = `[out:json][timeout:20];
+way(around:10000,${h.lat},${h.lon})["waterway"~"river|canal"];
 out geom;`;
 
-  try {
-    const data = await overpassQuery(query);
+    const data = await overpassQuery(query, 18000);
 
-    const ways = [];
-    for (const el of (data.elements || [])){
-      if (!el.geometry || el.geometry.length < 2) continue;
-      const geom = el.geometry.map(p => [p.lat, p.lon]);
-      const cl = closestOnLine([h.lat, h.lon], geom);
-      if (cl.dist < 5000) ways.push({ id: el.id, geom, closest: cl });
-    }
-    if (!ways.length) throw new Error('нет рек рядом');
-    ways.sort((a,b) => a.closest.dist - b.closest.dist);
-
-    const flowRad = (h.flowDir || 180) * Math.PI / 180;
-    const fLat = Math.cos(flowRad), fLon = Math.sin(flowRad);
-
-    for (const w of ways){
-      const g = w.geom;
-      const p0 = w.closest.point;
-      const dHead = [g[0][0]-p0[0], g[0][1]-p0[1]];
-      const dTail = [g[g.length-1][0]-p0[0], g[g.length-1][1]-p0[1]];
-      const cosLat = Math.cos(h.lat * Math.PI / 180);
-      const dotHead = dHead[0]*fLat + dHead[1]*fLon*cosLat;
-      const dotTail = dTail[0]*fLat + dTail[1]*fLon*cosLat;
-      w.reversed = dotTail > dotHead;
-    }
-
-    const used = new Set();
-    const first = ways[0];
-    const g0 = first.reversed ? [...first.geom].reverse() : [...first.geom];
-    const cl0 = closestOnLine([h.lat, h.lon], g0);
-    let course = [ [h.lat, h.lon], ...g0.slice(cl0.idx + 1) ];
-    used.add(first.id);
-
-    for (let iter = 0; iter < 40; iter++){
-      const tail = course[course.length - 1];
-      let bestW = null, bestDist = Infinity, bestGeom = null;
-      for (const w of ways){
-        if (used.has(w.id)) continue;
-        const g = w.reversed ? [...w.geom].reverse() : [...w.geom];
-        const dHead = haversineM(tail[0], tail[1], g[0][0], g[0][1]);
-        const dTail = haversineM(tail[0], tail[1], g[g.length-1][0], g[g.length-1][1]);
-        if (dHead < bestDist){ bestDist = dHead; bestW = w; bestGeom = g; }
-        if (dTail < bestDist){ bestDist = dTail; bestW = w; bestGeom = [...g].reverse(); }
+    if (data.elements && data.elements.length){
+      /* Все ways с геометрией и расстоянием до плотины */
+      const ways = [];
+      for (const el of data.elements){
+        if (!el.geometry || el.geometry.length < 2) continue;
+        const geom = el.geometry.map(p => [p.lat, p.lon]);
+        let bestD = Infinity, bestIdx = 0;
+        for (let i = 0; i < geom.length; i++){
+          const d = haversineM(h.lat, h.lon, geom[i][0], geom[i][1]);
+          if (d < bestD){ bestD = d; bestIdx = i; }
+        }
+        if (bestD < 3000) ways.push({ geom, bestD, bestIdx });
       }
-      if (!bestW || bestDist > 3000) break;
-      course.push(...bestGeom.slice(1));
-      used.add(bestW.id);
-      if (courseLength(course) > 200000) break;
+
+      if (ways.length){
+        ways.sort((a,b) => a.bestD - b.bestD);
+        const w = ways[0];
+        let g = w.geom;
+
+        /* Определяем, в какую сторону идёт река.
+           Считаем направление от точки idx к idx+3 и к idx-3.
+           Сравниваем с flowDir. */
+        const idx = w.bestIdx;
+        const cosLat = Math.cos(h.lat * Math.PI / 180);
+        const flowRad = (h.flowDir || 180) * Math.PI / 180;
+        const fLat = Math.cos(flowRad), fLon = Math.sin(flowRad);
+
+        const idxA = Math.min(idx + 5, g.length - 1);
+        const idxB = Math.max(idx - 5, 0);
+
+        const dotA = (g[idxA][0]-g[idx][0])*fLat + (g[idxA][1]-g[idx][1])*fLon*cosLat;
+        const dotB = (g[idxB][0]-g[idx][0])*fLat + (g[idxB][1]-g[idx][1])*fLon*cosLat;
+
+        /* Идём в ту сторону, где dot больше */
+        const downstream = dotA >= dotB ? g.slice(idx) : g.slice(0, idx + 1).reverse();
+
+        if (downstream.length >= 3){
+          osmCourse = [ [h.lat, h.lon], ...downstream ];
+          console.log(`Русло ${h.name} — OSM: ${osmCourse.length} точек`);
+        }
+      }
     }
-
-    if (course.length < 3) throw new Error('цепочка не собралась');
-
-    const params = getWaveParams(h);
-    course = trimCourse(course, Math.max(150000, params.maxDist * 1.6));
-
-    try { localStorage.setItem(key, JSON.stringify({ ts:Date.now(), course })); } catch(e){}
-    console.log(`Русло ${h.name} — ${course.length} точек, ${Math.round(courseLength(course)/1000)} км`);
-    return course;
-
   } catch(e){
-    console.warn(`Русло ${h.name} — ошибка: ${e.message}`);
-    return null;
+    console.warn(`OSM-русло ${h.name} не удалось: ${e.message}`);
   }
+
+  /* 3. Если OSM не дал — фолбэк */
+  if (!osmCourse){
+    const params = getWaveParams(h);
+    osmCourse = makeFallbackCourse(h, params.maxDist * 1.5);
+    console.log(`Русло ${h.name} — фолбэк по flowDir (${osmCourse.length} точек)`);
+  }
+
+  /* 4. Обрезаем и кэшируем */
+  const params = getWaveParams(h);
+  const course = trimCourse(osmCourse, params.maxDist * 1.4);
+  try { localStorage.setItem(key, JSON.stringify({ ts:Date.now(), course })); } catch(e){}
+  return course;
 }
 
 /* ============================================================
@@ -359,25 +359,24 @@ async function loadReservoirOSM(h){
     }
   } catch(e){}
 
-  const query = `[out:json][timeout:30];
+  try {
+    const query = `[out:json][timeout:20];
 (
-  way["natural"="water"](around:40000,${h.lat},${h.lon});
-  relation["natural"="water"](around:40000,${h.lat},${h.lon});
-  way["water"="reservoir"](around:40000,${h.lat},${h.lon});
-  relation["water"="reservoir"](around:40000,${h.lat},${h.lon});
-  way["landuse"="reservoir"](around:40000,${h.lat},${h.lon});
-  way["waterway"="riverbank"](around:40000,${h.lat},${h.lon});
+  way(around:25000,${h.lat},${h.lon})["natural"="water"];
+  relation(around:25000,${h.lat},${h.lon})["natural"="water"];
+  way(around:25000,${h.lat},${h.lon})["water"~"reservoir|lake"];
+  relation(around:25000,${h.lat},${h.lon})["water"~"reservoir|lake"];
+  way(around:25000,${h.lat},${h.lon})["waterway"="riverbank"];
 );
 out geom;`;
 
-  try {
-    const data = await overpassQuery(query);
+    const data = await overpassQuery(query, 18000);
 
     const upRad = ((h.flowDir || 180) + 180) * Math.PI / 180;
     const upLat = Math.cos(upRad), upLon = Math.sin(upRad);
     const cosLat = Math.cos(h.lat * Math.PI / 180);
+    const nameRoot = (h.reservoirName || '').toLowerCase().slice(0, 6);
 
-    const nameRoot = (h.reservoirName || '').replace(/[ое]е$/,'').toLowerCase();
     const candidates = [];
 
     for (const el of (data.elements || [])){
@@ -393,31 +392,44 @@ out geom;`;
       }
       if (!parts.length) continue;
 
+      /* Проверяем: НИ ОДНА точка не должна быть сильно ниже плотины */
+      let maxDownstream = 0;
       let perim = 0, cLat = 0, cLon = 0, n = 0;
+
       for (const pts of parts){
         for (let i = 0; i < pts.length; i++){
           const a = pts[i], b = pts[(i+1) % pts.length];
           perim += haversineM(a[0],a[1],b[0],b[1]);
         }
-        for (const p of pts){ cLat += p[0]; cLon += p[1]; n++; }
+        for (const p of pts){
+          const dLat = p[0] - h.lat;
+          const dLon = (p[1] - h.lon) * cosLat;
+          const dotUp = dLat * upLat + dLon * upLon;
+          if (-dotUp > maxDownstream) maxDownstream = -dotUp;
+          cLat += p[0]; cLon += p[1]; n++;
+        }
       }
       if (!n) continue;
       cLat /= n; cLon /= n;
-      if (perim < 3000) continue;
+
+      /* Если что-то вылезает вниз по течению более 3 км — отбрасываем */
+      if (maxDownstream > 3000) continue;
+
+      if (perim < 2000) continue;
 
       const dist = haversineM(h.lat, h.lon, cLat, cLon);
-      if (dist > 35000) continue;
+      if (dist > 25000) continue;
 
+      /* Должен быть ВЫШЕ плотины */
       const dLat = cLat - h.lat;
       const dLon = (cLon - h.lon) * cosLat;
       const dotUp = dLat * upLat + dLon * upLon;
       if (dotUp < 0) continue;
 
-      const tags = el.tags || {};
-      const nm = (tags.name || '').toLowerCase();
+      /* Проверка имени */
+      const nm = (el.tags?.name || '').toLowerCase();
       let nameMatch = 0;
-      if (nm && nameRoot && nm.includes(nameRoot)) nameMatch = 1;
-      else if (tags.water === 'reservoir') nameMatch = 0.5;
+      if (nameRoot && nm.includes(nameRoot)) nameMatch = 1;
 
       candidates.push({ parts, perim, dist, nameMatch });
     }
@@ -429,7 +441,7 @@ out geom;`;
 
     const result = candidates.slice(0, 3).map(c => c.parts);
     try { localStorage.setItem(key, JSON.stringify({ ts:Date.now(), polygons:result })); } catch(e){}
-    console.log(`Водохранилище ${h.name} — ${result.length} объектов (из ${candidates.length})`);
+    console.log(`Водохранилище ${h.name} — ${result.length} объектов из ${candidates.length}`);
     return result;
 
   } catch(e){
@@ -440,7 +452,7 @@ out geom;`;
 }
 
 /* ============================================================
-   СИНТЕТИКА
+   СИНТЕТИКА И OPEN-METEO
    ============================================================ */
 function syntheticData(h, mode){
   let start, end;
@@ -467,9 +479,6 @@ function syntheticData(h, mode){
   return { hydro:{time:times,q:qs}, clim:{time:times,t:ts,p:ps} };
 }
 
-/* ============================================================
-   OPEN-METEO
-   ============================================================ */
 async function fetchFromAPI(h, mode){
   if (mode === 'history'){
     const start = HISTORY_START;
@@ -478,14 +487,16 @@ async function fetchFromAPI(h, mode){
       fetchWithRetry(`https://archive-api.open-meteo.com/v1/archive?latitude=${h.lat}&longitude=${h.lon}&start_date=${start}&end_date=${end}&daily=temperature_2m_mean,precipitation_sum&timezone=UTC`),
       fetchWithRetry(`https://flood-api.open-meteo.com/v1/flood?latitude=${h.lat}&longitude=${h.lon}&daily=river_discharge&start_date=${start}&end_date=${end}`)
     ]);
-    return { hydro:{time:f.daily.time, q:f.daily.river_discharge}, clim:{time:a.daily.time, t:a.daily.temperature_2m_mean, p:a.daily.precipitation_sum} };
+    return { hydro:{time:f.daily.time, q:f.daily.river_discharge},
+             clim:{time:a.daily.time, t:a.daily.temperature_2m_mean, p:a.daily.precipitation_sum} };
   }
   if (mode === 'forecast'){
     const [a,f] = await Promise.all([
       fetchWithRetry(`https://api.open-meteo.com/v1/forecast?latitude=${h.lat}&longitude=${h.lon}&daily=temperature_2m_mean,precipitation_sum&past_days=30&forecast_days=16&timezone=UTC`),
       fetchWithRetry(`https://flood-api.open-meteo.com/v1/flood?latitude=${h.lat}&longitude=${h.lon}&daily=river_discharge&past_days=30&forecast_days=16`)
     ]);
-    return { hydro:{time:f.daily.time, q:f.daily.river_discharge}, clim:{time:a.daily.time, t:a.daily.temperature_2m_mean, p:a.daily.precipitation_sum} };
+    return { hydro:{time:f.daily.time, q:f.daily.river_discharge},
+             clim:{time:a.daily.time, t:a.daily.temperature_2m_mean, p:a.daily.precipitation_sum} };
   }
   if (mode === 'climate'){
     const a = await fetchWithRetry(
@@ -502,9 +513,6 @@ async function fetchFromAPI(h, mode){
   throw new Error('unknown mode');
 }
 
-/* ============================================================
-   ЗАГРУЗКА ОДНОЙ СТАНЦИИ
-   ============================================================ */
 async function loadStation(h, mode){
   if (apiAvailable === false){
     return { data: syntheticData(h, mode), source: 'synth' };
@@ -514,7 +522,6 @@ async function loadStation(h, mode){
     setCached(mode, h.id, data);
     return { data, source: 'api' };
   } catch(e){
-    // При ошибке — пробуем устаревший кэш, иначе синтетику
     const stale = getStaleCached(mode, h.id);
     if (stale) return { data: stale, source: 'cache' };
     console.warn(`Станция ${h.name}: ${e.message}`);
@@ -602,7 +609,7 @@ function recompute(){
 }
 
 /* ============================================================
-   МАРКЕРЫ (создаём сразу все)
+   МАРКЕРЫ
    ============================================================ */
 function createMarker(h){
   const mk = L.circleMarker([h.lat, h.lon], {
@@ -630,19 +637,14 @@ function updateTimeline(mode){
 }
 
 /* ============================================================
-   ЗАГРУЗКА ПЕРИОДА — cache-first
+   ЗАГРУЗКА ПЕРИОДА
    ============================================================ */
 async function loadPeriod(mode){
   if (S.loading) return;
   S.loading = true;
 
-  S.results = {};
-  S.idx = 0;
-  S.playing = false;
-  S.damBreak = null;
-  S.cache[mode] = {};
-  S.sources = {};
-  S.loadingStation = {};
+  S.results = {}; S.idx = 0; S.playing = false; S.damBreak = null;
+  S.cache[mode] = {}; S.sources = {}; S.loadingStation = {};
 
   layerFlood.clearLayers();
   layerRes.clearLayers();
@@ -655,10 +657,9 @@ async function loadPeriod(mode){
     item.querySelector('.src').className = 'src loading';
     item.querySelector('.mw').textContent = '…';
   });
-
   setStatus(`<span class="warn">загрузка</span> · ${mode}`);
 
-  /* ===== ЭТАП 1: мгновенно из кэша ===== */
+  /* Этап 1: из кэша */
   let fromCache = 0;
   HPPS.forEach(h => {
     const cached = getCached(mode, h.id);
@@ -667,7 +668,6 @@ async function loadPeriod(mode){
       S.sources[h.id] = 'cache';
       S.results[h.id] = simulate(h, cached.hydro, cached.clim);
       fromCache++;
-
       const item = document.querySelector(`.hppItem[data-id="${h.id}"]`);
       if (item){
         item.querySelector('.src').className = 'src cache';
@@ -676,27 +676,23 @@ async function loadPeriod(mode){
     }
   });
 
-  // Показать хоть что-то сразу
   if (fromCache){
     const first = HPPS.find(h => S.cache[mode][h.id]);
     if (first){
       S.dates = S.cache[mode][first.id].hydro.time;
       updateTimeline(mode);
-      recompute();
-      render();
+      recompute(); render();
     }
   }
 
-  /* ===== ЭТАП 2: проверка API ===== */
+  /* Этап 2: проверка API */
   if (apiAvailable === null) await pingAPI();
 
-  /* ===== ЭТАП 3: докачка свежих данных ===== */
+  /* Этап 3: докачка */
   const missing = HPPS.filter(h => !S.cache[mode][h.id]);
-  // Сортируем по приоритету
   missing.sort((a,b) => {
-    const ai = PRIORITY.indexOf(a.id);
-    const bi = PRIORITY.indexOf(b.id);
-    return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi);
+    const ai = PRIORITY.indexOf(a.id), bi = PRIORITY.indexOf(b.id);
+    return (ai<0?999:ai) - (bi<0?999:bi);
   });
 
   if (!apiAvailable && !missing.length){
@@ -713,7 +709,6 @@ async function loadPeriod(mode){
       const h = queue.shift();
       if (S.loadingStation[h.id]) continue;
       S.loadingStation[h.id] = true;
-
       const { data, source } = await loadStation(h, mode);
       S.cache[mode][h.id] = data;
       S.sources[h.id] = source;
@@ -729,25 +724,17 @@ async function loadPeriod(mode){
         item.querySelector('.mw').textContent = h.capacityMW + ' МВт';
       }
 
-      // Обновляем маркер (перекрашиваем в зелёный)
-      if (S.markers[h.id]) {
-        const mk = S.markers[h.id];
-        // цвет поставит render()
-      }
-
       if (!S.dates){
         S.dates = data.hydro.time;
         updateTimeline(mode);
       }
-      recompute();
-      render();
+      recompute(); render();
 
       done++;
       setStatus(`<span class="warn">докачка</span> · ${done}/${missing.length}`);
       await sleep(300);
     }
   }
-
   await Promise.all([worker(), worker()]);
 
   const parts = [];
@@ -755,25 +742,24 @@ async function loadPeriod(mode){
   if (countApi)  parts.push(`<span class="ok">🟢 ${countApi} онлайн</span>`);
   if (countSynth)parts.push(`<span class="err">🔴 ${countSynth} офлайн</span>`);
   setStatus(`<b>${mode}</b> · ${parts.join(' · ')}`);
-
   S.loading = false;
 }
 
 /* ============================================================
-   ВОЛНА
+   ПАРАМЕТРЫ ВОЛНЫ — УВЕЛИЧЕНЫ
    ============================================================ */
 function getWaveParams(h){
   const a = h.terrainAmpl || 100;
   if (a > 300){
-    return { type:'горная', maxDist:40000, maxWidth:800, speedMs:15,
-             baseDuration:8, ringCount:3, description:'Узкая быстрая волна вдоль ущелья' };
+    return { type:'горная', maxDist:60000, maxWidth:2000, speedMs:15,
+             baseDuration:8, ringCount:4, description:'Узкая быстрая волна вдоль ущелья' };
   }
   if (a > 150){
-    return { type:'предгорная', maxDist:35000, maxWidth:1500, speedMs:8,
-             baseDuration:10, ringCount:3, description:'Волна средней ширины' };
+    return { type:'предгорная', maxDist:80000, maxWidth:4000, speedMs:8,
+             baseDuration:10, ringCount:4, description:'Волна средней ширины' };
   }
-  return { type:'равнинная', maxDist:50000, maxWidth:3500, speedMs:3,
-           baseDuration:12, ringCount:4, description:'Широкая медленная волна по пойме' };
+  return { type:'равнинная', maxDist:120000, maxWidth:8000, speedMs:3,
+           baseDuration:12, ringCount:5, description:'Широкая медленная волна по пойме' };
 }
 
 function makeBandPolygon(centerline, widthM, latRef){
@@ -836,20 +822,22 @@ async function startDamBreak(){
 
   const params = getWaveParams(h);
 
+  /* Русло: если нет в памяти — загружаем (с фолбэком) */
   if (!S.riverCourses[h.id]){
     showStatusMsg(`Загрузка русла ${h.river}…`);
     S.riverCourses[h.id] = await loadRiverCourse(h);
   }
   const course = S.riverCourses[h.id];
 
+  /* НЕ должно случиться, но на всякий случай */
   if (!course || course.length < 3){
-    showStatusMsg('Не удалось загрузить русло реки — прорыв недоступен');
+    showStatusMsg('Не удалось построить русло');
     return;
   }
 
   layerFlood.clearLayers();
   S.damBreak = { id:h.id, progress:0, start:performance.now(), duration:params.baseDuration, course };
-  $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · до ${(courseLength(course)/1000).toFixed(0)} км`;
+  $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · ${(courseLength(course)/1000).toFixed(0)} км`;
   $('alertBanner').classList.add('show');
 
   recompute(); render();
@@ -860,6 +848,7 @@ async function startDamBreak(){
     const elapsed = (t - S.damBreak.start)/1000;
     S.damBreak.progress = Math.min(1, elapsed / S.damBreak.duration);
     layerFlood.clearLayers();
+
     const wave = makeFloodWaveFromCourse(h, course, S.damBreak.progress);
     if (wave){
       const fade = 1 - S.damBreak.progress * 0.5;
@@ -895,7 +884,7 @@ function stopDamBreak(){
 }
 
 /* ============================================================
-   ВОДОХРАНИЛИЩЕ
+   ВОДОХРАНИЛИЩЕ — с фолбэком-эллипсом
    ============================================================ */
 function drawReservoir(h, i, lf, overtop){
   if (S.reservoirs[h.id]){ layerRes.removeLayer(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
@@ -908,19 +897,61 @@ function drawReservoir(h, i, lf, overtop){
   else { color='#31c9ff'; fill='#31c9ff'; op=0.13; }
 
   const osmPolys = S.reservoirsOSM[h.id];
-  if (!osmPolys || !osmPolys.length) return;
 
-  const group = L.layerGroup();
-  osmPolys.forEach(parts => {
-    parts.forEach(pts => {
-      L.polygon(pts, {
-        color: color, weight: 1, opacity: 0.55,
-        fillColor: fill, fillOpacity: op, interactive: false
-      }).addTo(group);
+  if (osmPolys && osmPolys.length){
+    /* Реальные полигоны из OSM */
+    const group = L.layerGroup();
+    osmPolys.forEach(parts => {
+      parts.forEach(pts => {
+        L.polygon(pts, {
+          color: color, weight: 1, opacity: 0.55,
+          fillColor: fill, fillOpacity: op, interactive: false
+        }).addTo(group);
+      });
     });
-  });
-  group.addTo(layerRes);
-  S.reservoirs[h.id] = group;
+    group.addTo(layerRes);
+    S.reservoirs[h.id] = group;
+    return;
+  }
+
+  /* Фолбэк: эллипс, растянутый вдоль реки ВЫШЕ плотины */
+  const areaKm2 = r.area[i];
+  const areaM2 = areaKm2 * 1e6;
+  const aspect = 3;   // 3:1 вдоль реки
+  const a = Math.sqrt(areaM2 * aspect / Math.PI);   // полуось вдоль реки
+  const b = Math.sqrt(areaM2 / (Math.PI * aspect)); // полуось поперёк
+
+  const upRad = ((h.flowDir || 180) + 180) * Math.PI / 180;
+  const upLat = Math.cos(upRad);
+  const upLon = Math.sin(upRad);
+  const perpLat = -upLon;
+  const perpLon = upLat;
+
+  const R = 6371000;
+  const latR = h.lat * Math.PI / 180;
+
+  /* Центр эллипса — на расстоянии `a` вверх по течению */
+  const cLat = h.lat + (a * upLat) / R * 180 / Math.PI;
+  const cLon = h.lon + (a * upLon) / (R * Math.cos(latR)) * 180 / Math.PI;
+
+  const pts = [];
+  const N = 48;
+  for (let k = 0; k < N; k++){
+    const ang = k * 2 * Math.PI / N;
+    const localAlong  = a * Math.cos(ang);
+    const localAcross = b * Math.sin(ang);
+
+    const dLat = (localAlong * upLat + localAcross * perpLat) / R * 180 / Math.PI;
+    const dLon = (localAlong * upLon + localAcross * perpLon) / (R * Math.cos(latR)) * 180 / Math.PI;
+
+    pts.push([cLat + dLat, cLon + dLon]);
+  }
+
+  const poly = L.polygon(pts, {
+    color: color, weight: 1, opacity: 0.55,
+    fillColor: fill, fillOpacity: op, interactive: false
+  }).addTo(layerRes);
+  S.reservoirs[h.id] = poly;
 }
 
 /* ============================================================
@@ -997,7 +1028,7 @@ function buildUI(){
 }
 
 /* ============================================================
-   РЕНДЕР (без продвижения idx — это делает loop)
+   РЕНДЕР
    ============================================================ */
 function render(){
   const i = S.idx;
@@ -1009,12 +1040,10 @@ function render(){
     const r = S.results[h.id];
     const mk = S.markers[h.id];
     if (!mk) return;
-
     if (!r){
       mk.setStyle({ fillColor:'#555', color:'#ffffff', weight:2.5, opacity:0.7, fillOpacity:0.7 });
       return;
     }
-
     const lf = r.lf[i], lvl = r.level[i];
     const overtop = lvl > h.nmu - 0.15;
     const isBroken = (S.scenario === 'dam_break' && S.selected === h.id);
@@ -1076,33 +1105,26 @@ async function selectHPP(id, fromList){
   $('chartTitle').textContent = h.name;
   $('chartSub').textContent = `р. ${h.river}`;
 
-  if (fromList) map.flyTo([h.lat, h.lon], Math.max(map.getZoom(), 8), { duration:0.8 });
+  if (fromList) map.flyTo([h.lat, h.lon], Math.max(map.getZoom(), 7), { duration:0.8 });
   S.markers[id]?.openPopup();
 
-  /* Ленивая догрузка станции, если данных ещё нет */
   if (!S.cache[S.mode]?.[id] && !S.loadingStation[id] && apiAvailable !== false){
     S.loadingStation[id] = true;
     const item = document.querySelector(`.hppItem[data-id="${id}"]`);
     if (item) item.querySelector('.src').className = 'src loading';
-
     const { data, source } = await loadStation(h, S.mode);
     S.cache[S.mode][id] = data;
     S.sources[id] = source;
     S.results[id] = simulate(h, data.hydro, data.clim);
     delete S.loadingStation[id];
-
     if (item){
       item.querySelector('.src').className = 'src ' + source;
       item.querySelector('.mw').textContent = h.capacityMW + ' МВт';
     }
-    if (!S.dates){
-      S.dates = data.hydro.time;
-      updateTimeline(S.mode);
-    }
+    if (!S.dates){ S.dates = data.hydro.time; updateTimeline(S.mode); }
     recompute(); render();
   }
 
-  /* Фоновая загрузка русла и водохранилища */
   if (!S.riverCourses[h.id] && !S.loadingRiver[h.id]){
     S.loadingRiver[h.id] = loadRiverCourse(h).then(c => {
       S.riverCourses[h.id] = c; delete S.loadingRiver[h.id];
@@ -1135,11 +1157,11 @@ function detailsHTML(h){
   const wp = getWaveParams(h);
   const course = S.riverCourses[h.id];
   const courseInfo = course
-    ? `русло: ${Math.round(courseLength(course)/1000)} км (OSM)`
+    ? `русло: ${Math.round(courseLength(course)/1000)} км`
     : (S.loadingRiver[h.id] ? 'русло загружается…' : 'русло не загружено');
   const resInfo = S.reservoirsOSM[h.id]
-    ? (S.reservoirsOSM[h.id].length ? `водохранилище: ${S.reservoirsOSM[h.id].length} объектов OSM` : 'водохранилище: нет данных OSM')
-    : (S.loadingRes[h.id] ? 'водохранилище загружается…' : 'водохранилище: нет данных');
+    ? (S.reservoirsOSM[h.id].length ? `водохранилище: ${S.reservoirsOSM[h.id].length} объектов OSM` : 'водохранилище: фолбэк (эллипс)')
+    : (S.loadingRes[h.id] ? 'водохранилище загружается…' : 'водохранилище: фолбэк');
 
   return `<h3>${h.name}</h3>
   <div style="font-size:11px;margin-bottom:6px">${srcLabel}</div>
@@ -1194,7 +1216,7 @@ function updateChart(){
 }
 
 /* ============================================================
-   АНИМАЦИЯ — без recompute в цикле
+   АНИМАЦИЯ
    ============================================================ */
 function togglePlay(){
   if (!S.dates.length) return;
@@ -1222,12 +1244,8 @@ function loop(t){
    ============================================================ */
 (async function boot(){
   buildUI();
-  try {
-    await loadPeriod('history');
-  } catch(e){
-    console.error('Ошибка:', e);
-    setStatus('<span class="err">ошибка: '+e.message+'</span>');
-  }
+  try { await loadPeriod('history'); }
+  catch(e){ console.error('Ошибка:', e); setStatus('<span class="err">ошибка: '+e.message+'</span>'); }
 })();
 
 window.addEventListener('error', e => console.error('Ошибка страницы:', e.error || e.message));
