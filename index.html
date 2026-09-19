@@ -16,27 +16,23 @@
 html,body{height:100%;margin:0;font-family:'Segoe UI',Roboto,system-ui,sans-serif;
   background:var(--bg);color:var(--txt);overflow:hidden}
 #map{position:absolute;inset:0;z-index:1}
-
 #topbar{position:absolute;top:12px;left:12px;z-index:1000;background:var(--panel);
   backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:12px;
   padding:10px 16px;box-shadow:0 8px 28px rgba(0,0,0,.5);pointer-events:none}
 #topbar h1{margin:0;font-size:15px;font-weight:600}
 #topbar p{margin:3px 0 0;font-size:11px;color:var(--dim)}
-
 #modeTabs{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;
   background:var(--panel);backdrop-filter:blur(10px);border:1px solid var(--line);
   border-radius:12px;display:flex;padding:5px;gap:4px;box-shadow:0 8px 28px rgba(0,0,0,.5)}
 #modeTabs button{background:transparent;color:var(--dim);border:0;cursor:pointer;
   padding:8px 14px;border-radius:8px;font-size:12px;font-weight:500;font-family:inherit}
 #modeTabs button.active{background:rgba(49,201,255,.18);color:var(--acc);font-weight:600}
-
 #sidebar{position:absolute;top:64px;left:12px;bottom:100px;width:330px;z-index:1000;
   background:var(--panel);backdrop-filter:blur(10px);border:1px solid var(--line);
   border-radius:12px;display:flex;flex-direction:column;overflow:hidden;
   box-shadow:0 8px 28px rgba(0,0,0,.5)}
 #sidebar header{padding:12px 14px 8px;font-size:12px;color:var(--dim);
   text-transform:uppercase;letter-spacing:.8px;border-bottom:1px solid var(--line)}
-
 #scenarios{padding:8px;border-bottom:1px solid var(--line);display:grid;
   grid-template-columns:1fr 1fr;gap:5px}
 .scenBtn{background:rgba(255,255,255,.04);color:var(--dim);border:1px solid var(--line);
@@ -45,7 +41,6 @@ html,body{height:100%;margin:0;font-family:'Segoe UI',Roboto,system-ui,sans-seri
 .scenBtn:hover{background:rgba(255,255,255,.08);color:var(--txt)}
 .scenBtn.active{background:rgba(49,201,255,.18);border-color:rgba(49,201,255,.5);color:var(--acc)}
 .scenBtn.danger.active{background:rgba(255,59,59,.2);border-color:rgba(255,59,59,.55);color:#ff6b6b}
-
 #hppList{overflow-y:auto;flex:1;padding:6px}
 .hppItem{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;
   cursor:pointer;font-size:13px;transition:background .15s}
@@ -59,7 +54,6 @@ html,body{height:100%;margin:0;font-family:'Segoe UI',Roboto,system-ui,sans-seri
 @keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
 .hppItem .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hppItem .mw{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
-
 #details{border-top:1px solid var(--line);padding:10px 14px 14px;font-size:12px;
   max-height:40%;overflow-y:auto}
 #details h3{margin:0 0 8px;font-size:13px;color:var(--acc)}
@@ -68,7 +62,6 @@ html,body{height:100%;margin:0;font-family:'Segoe UI',Roboto,system-ui,sans-seri
 .kv span:first-child{color:var(--dim)}
 .kv span:last-child{font-weight:500;font-variant-numeric:tabular-nums}
 .kv.danger span:last-child{color:#ff6b6b;font-weight:700}
-
 #timeline{position:absolute;left:355px;right:12px;bottom:12px;height:76px;z-index:1000;
   background:var(--panel);backdrop-filter:blur(10px);border:1px solid var(--line);
   border-radius:12px;display:flex;align-items:center;gap:14px;padding:0 18px;
@@ -92,7 +85,6 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
   align-items:center}
 #speedBox select{background:#1a2430;color:var(--txt);border:1px solid var(--line);
   border-radius:6px;padding:3px 6px;font-size:11px;outline:none}
-
 #chartPanel{position:absolute;right:12px;bottom:100px;width:450px;height:265px;
   z-index:1000;background:var(--panel);backdrop-filter:blur(10px);
   border:1px solid var(--line);border-radius:12px;padding:10px 12px 6px;
@@ -102,28 +94,24 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
   font-size:12px;color:var(--dim);margin-bottom:4px}
 #chartPanel .head b{color:var(--acc);font-size:13px}
 #chartPanel canvas{flex:1;min-height:0}
-
 #alertBanner{position:absolute;top:110px;left:50%;transform:translateX(-50%);z-index:1500;
   background:rgba(255,59,59,.94);color:#fff;padding:10px 22px;border-radius:10px;
   font-size:13px;font-weight:600;display:none;box-shadow:0 8px 32px rgba(255,59,59,.5)}
 #alertBanner.show{display:block}
-
 #statusBar{position:absolute;top:64px;right:12px;z-index:1000;background:var(--panel);
   backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:10px;
-  padding:8px 14px;font-size:11px;color:var(--dim);max-width:320px;line-height:1.5;
+  padding:8px 14px;font-size:11px;color:var(--dim);max-width:340px;line-height:1.5;
   box-shadow:0 8px 28px rgba(0,0,0,.5)}
 #statusBar b{color:var(--acc)}
 #statusBar .ok{color:#3ddc84}
 #statusBar .warn{color:#ffb02e}
 #statusBar .err{color:#ff6b6b}
-
 .leaflet-popup-content-wrapper{background:var(--panel2);color:var(--txt);
   border:1px solid var(--line);border-radius:10px;backdrop-filter:blur(10px)}
 .leaflet-popup-tip{background:var(--panel2)}
 .leaflet-popup-content{margin:12px 14px;font-size:12px;line-height:1.55}
 .leaflet-popup-content h4{margin:0 0 7px;font-size:13px;color:var(--acc)}
 .leaflet-container a.leaflet-popup-close-button{color:var(--dim)}
-
 @media(max-width:1100px){
   #chartPanel{display:none!important}
   #statusBar{display:none}
@@ -196,9 +184,8 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
 <script>
 /* ============================================================
    1. ПАСПОРТНЫЕ ДАННЫЕ ГЭС
-   Значения приближены к открытым источникам (Википедия, РусГидро).
-   terrain.ampl — оценка амплитуды рельефа вокруг станции (м).
-   Для горных ГЭС — большая, для равнинных — малая.
+   terrainAmpl — оценка амплитуды рельефа вокруг станции, м.
+   Влияет на тип волны прорыва: горная / предгорная / равнинная.
    ============================================================ */
 const HPPS = [
   {id:'volzh', name:'Волжская ГЭС', river:'Волга', lat:48.8253, lon:44.6806, flowDir:180,
@@ -322,7 +309,7 @@ async function fetchWithRetry(url, ms = 15000, tries = 2){
 /* ============================================================
    5. КЭШ В LOCALSTORAGE
    ============================================================ */
-const CACHE_KEY = 'ges_cache_v6';
+const CACHE_KEY = 'ges_cache_v7';
 const TTL = { history: 12*3600*1000, forecast: 30*60*1000, climate: 7*24*3600*1000 };
 
 function readCacheAll(){
@@ -350,7 +337,7 @@ function setCached(mode, id, data){
 }
 
 /* ============================================================
-   6. СИНТЕТИЧЕСКИЕ ДАННЫЕ (фолбэк при недоступности API)
+   6. СИНТЕТИЧЕСКИЕ ДАННЫЕ
    ============================================================ */
 function syntheticData(h, mode){
   let start, end;
@@ -667,7 +654,7 @@ async function loadPeriod(mode){
 }
 
 /* ============================================================
-   10. ГЕОМЕТРИЯ
+   10. ГЕОМЕТРИЯ ВОДОХРАНИЛИЩА
    ============================================================ */
 function makeReservoirPolygon(h, radiusM){
   const pts = [], N = 40, R = 6371000;
@@ -689,21 +676,84 @@ function makeReservoirPolygon(h, radiusM){
   return pts;
 }
 
-function makeFloodWave(h, progress){
-  if (progress <= 0 || progress >= 1) return null;
-  const maxDist = 70000, maxWidth = 18000;
-  const dist  = maxDist * Math.pow(progress, 0.7);
-  const width = maxWidth * Math.min(1, progress * 1.6);
-  const dir = (h.flowDir || 180) * Math.PI / 180;
-  const dLat = Math.cos(dir), dLon = Math.sin(dir);
-  const R = 6371000, latR = h.lat * Math.PI / 180;
-  const pts = [];
-  for (let a = 0; a < 32; a++){
-    const ang = a * 2 * Math.PI / 32;
-    const along  = dist * (0.5 + 0.5 * Math.cos(ang)) - 3000;
-    const across = width * 0.5 * Math.sin(ang) * (0.35 + 0.65 * Math.min(1, progress*2));
+/* ============================================================
+   11. ВОЛНА ПРОРЫВА — УЛУЧШЕННАЯ МОДЕЛЬ
+   ------------------------------------------------------------
+   Возвращает массив колец, каждое — отдельный полигон.
+   Внешнее кольцо = фронт волны (ярче).
+   Внутренние = уже осевшая вода (прозрачнее).
+
+   Параметры волны зависят от terrainAmpl:
+     > 300 м  → горная    — быстро, узко, далеко (ущелье)
+     > 150 м  → предгорная — средне
+     ≤ 150 м  → равнинная  — медленно, широко (пойма)
+   ============================================================ */
+function getWaveParams(h){
+  const ampl = h.terrainAmpl || 100;
+
+  if (ampl > 300){
+    return {
+      type: 'горная',
+      maxDist: 90000,      // 90 км — вода уходит далеко по ущелью
+      maxWidth: 9000,      // 9 км — узкая долина
+      speedMs: 15,         // 15 м/с — быстро
+      baseDuration: 8,     // анимация 8 секунд
+      ringCount: 3,        // мало колец — узкая волна
+      roughness: 0.45,
+      description: 'Узкая быстрая волна вдоль ущелья'
+    };
+  }
+  if (ampl > 150){
+    return {
+      type: 'предгорная',
+      maxDist: 80000,
+      maxWidth: 14000,
+      speedMs: 8,
+      baseDuration: 10,
+      ringCount: 4,
+      roughness: 0.55,
+      description: 'Волна средней ширины, быстрый сход'
+    };
+  }
+  return {
+    type: 'равнинная',
+    maxDist: 130000,       // 130 км — широкая пойма
+    maxWidth: 28000,       // 28 км — растекается по равнине
+    speedMs: 3,            // 3 м/с — медленно
+    baseDuration: 12,
+    ringCount: 5,
+    roughness: 0.7,
+    description: 'Широкая медленная волна, большое затопление'
+  };
+}
+
+/* Одно кольцо волны */
+function makeWaveRing(h, dist, width, ringProgress, params){
+  const pts = [], N = 48, R = 6371000;
+  const latR = h.lat * Math.PI / 180;
+
+  // Искривление русла — небольшой изгиб в зависимости от прогресса
+  const curve = Math.sin(ringProgress * Math.PI) * 0.18;
+  const baseDir = (h.flowDir || 180) * Math.PI / 180;
+  const dir = baseDir + curve;
+
+  const dLat = Math.cos(dir);
+  const dLon = Math.sin(dir);
+
+  const startOffset = -2000;    // волна начинается чуть выше плотины
+
+  for (let a = 0; a < N; a++){
+    const ang = a * 2 * Math.PI / N;
+
+    const along = startOffset + dist * (0.5 + 0.5 * Math.cos(ang));
+    // Ширина увеличивается с прогрессом
+    const widthFactor = 0.35 + 0.65 * Math.min(1, ringProgress * 2);
+    const across = width * 0.5 * Math.sin(ang) * widthFactor;
+
+    // Поворот вектора на направление течения
     const px = along * dLat - across * dLon;
     const py = along * dLon + across * dLat;
+
     pts.push([
       h.lat + px / R * 180 / Math.PI,
       h.lon + py / (R * Math.cos(latR)) * 180 / Math.PI
@@ -712,42 +762,106 @@ function makeFloodWave(h, progress){
   return pts;
 }
 
+/* Все кольца волны */
+function makeFloodWave(h, progress){
+  if (progress <= 0 || progress >= 1) return null;
+
+  const params = getWaveParams(h);
+  const rings = [];
+
+  for (let k = 1; k <= params.ringCount; k++){
+    const ringProgress = progress * (k / params.ringCount);
+    if (ringProgress <= 0.02) continue;
+
+    const dist  = params.maxDist  * Math.pow(ringProgress, 0.7);
+    const width = params.maxWidth * Math.min(1, ringProgress * 1.6);
+    const pts   = makeWaveRing(h, dist, width, ringProgress, params);
+
+    // Внутренние кольца — бледнее, внешние (фронт) — ярче
+    const ringFrac = k / params.ringCount;
+    const opacity  = 0.08 + 0.35 * ringFrac;
+
+    rings.push({ pts, opacity, k, dist, width });
+  }
+
+  return { rings, params };
+}
+
 /* ============================================================
-   11. ПРОРЫВ ПЛОТИНЫ
+   12. ПРОРЫВ ПЛОТИНЫ
    ============================================================ */
 function startDamBreak(){
   if (!S.selected){ showStatusMsg('Выберите ГЭС'); return; }
   const h = HPPS.find(x => x.id === S.selected);
   if (!h || !S.cache[S.mode]?.[h.id]){ showStatusMsg('Данные недоступны'); return; }
 
+  const params = getWaveParams(h);
+
   layerFlood.clearLayers();
-  S.damBreak = { id: h.id, progress: 0, start: performance.now() };
+  S.damBreak = {
+    id: h.id,
+    progress: 0,
+    start: performance.now(),
+    duration: params.baseDuration
+  };
+  $('alertBanner').innerHTML =
+    `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · до ${(params.maxDist/1000).toFixed(0)} км`;
   $('alertBanner').classList.add('show');
 
+  // Один раз обнуляем — вода ушла, мощность = 0
   recompute();
   render();
+
+  // Обновляем панель деталей, чтобы показать параметры волны
+  $('details').innerHTML = detailsHTML(h);
 
   function step(t){
     if (!S.damBreak) return;
     const elapsed = (t - S.damBreak.start) / 1000;
-    S.damBreak.progress = Math.min(1, elapsed / 9);
+    S.damBreak.progress = Math.min(1, elapsed / S.damBreak.duration);
 
     layerFlood.clearLayers();
-    const pts = makeFloodWave(h, S.damBreak.progress);
-    if (pts){
-      L.polygon(pts, {
-        color:'#ff3b3b', weight:2, opacity:.95,
-        fillColor:'#ff5a5a', fillOpacity: 0.65 * (1 - S.damBreak.progress * 0.6)
-      }).addTo(layerFlood);
+
+    const wave = makeFloodWave(h, S.damBreak.progress);
+    if (wave){
+      const globalFade = 1 - S.damBreak.progress * 0.5;   // общее затухание
+      wave.rings.forEach(ring => {
+        L.polygon(ring.pts, {
+          color: '#ff3b3b',
+          weight: 1.5,
+          opacity: 0.85,
+          fillColor: '#ff5a5a',
+          fillOpacity: ring.opacity * globalFade,
+          interactive: false
+        }).addTo(layerFlood);
+      });
+
+      // Отдельная яркая линия фронта
+      const front = wave.rings[wave.rings.length - 1];
+      if (front){
+        L.polygon(front.pts, {
+          color: '#ff1a1a',
+          weight: 3,
+          opacity: 0.95,
+          fillOpacity: 0,
+          interactive: false
+        }).addTo(layerFlood);
+      }
     }
+
     render();
 
-    if (S.damBreak.progress < 1) requestAnimationFrame(step);
-    else setTimeout(() => {
-      layerFlood.clearLayers();
-      $('alertBanner').classList.remove('show');
-      S.damBreak = null;
-    }, 4500);
+    if (S.damBreak.progress < 1){
+      requestAnimationFrame(step);
+    } else {
+      // Волна ушла, зона остаётся на 6 секунд
+      setTimeout(() => {
+        layerFlood.clearLayers();
+        $('alertBanner').classList.remove('show');
+        S.damBreak = null;
+        $('details').innerHTML = detailsHTML(h);
+      }, 6000);
+    }
   }
   requestAnimationFrame(step);
 }
@@ -759,7 +873,7 @@ function stopDamBreak(){
 }
 
 /* ============================================================
-   12. ИНТЕРФЕЙС
+   13. ИНТЕРФЕЙС
    ============================================================ */
 function buildUI(){
   const list = $('hppList');
@@ -847,7 +961,7 @@ function buildUI(){
 }
 
 /* ============================================================
-   13. РЕНДЕР
+   14. РЕНДЕР
    ============================================================ */
 function render(){
   const i = S.idx;
@@ -924,7 +1038,7 @@ function popupHTML(h, r, i, col, isBroken, overtop){
 }
 
 /* ============================================================
-   14. ВЫБОР ГЭС + ГРАФИК
+   15. ВЫБОР ГЭС + ГРАФИК
    ============================================================ */
 function selectHPP(id, fromList){
   S.selected = id;
@@ -957,6 +1071,19 @@ function detailsHTML(h){
     : src === 'cache' ? '<span style="color:#ffb02e">🟡 из кэша</span>'
     : '<span style="color:#ff6b6b">🔴 офлайн-режим (демо)</span>';
 
+  // Информация о волне прорыва
+  const wp = getWaveParams(h);
+  const waveBlock = `
+  <div style="margin-top:8px;padding:8px 10px;background:rgba(255,59,59,.08);
+       border:1px solid rgba(255,59,59,.25);border-radius:8px;font-size:11px;line-height:1.5">
+    <div style="color:#ff6b6b;font-weight:700;margin-bottom:4px">🌊 Волна прорыва — ${wp.type}</div>
+    <div>${wp.description}</div>
+    <div style="color:#8ba0b6;margin-top:4px">
+      скорость ≈ ${wp.speedMs} м/с · до ${(wp.maxDist/1000).toFixed(0)} км ·
+      ширина до ${(wp.maxWidth/1000).toFixed(0)} км
+    </div>
+  </div>`;
+
   return `
   <h3>${h.name}</h3>
   <div style="font-size:11px;margin-bottom:6px">${srcLabel}</div>
@@ -969,10 +1096,11 @@ function detailsHTML(h){
   <div class="kv"><span>Площадь при НПУ</span><span>${h.areaNMU} км²</span></div>
   <div class="kv"><span>Полный объём</span><span>${h.totalVolume} км³</span></div>
   <div class="kv"><span>Полезный объём</span><span>${h.usefulVolume} км³</span></div>
-  <div class="kv"><span>Амплитуда рельефа (оценка)</span><span>${h.terrainAmpl} м</span></div>
+  <div class="kv"><span>Амплитуда рельефа</span><span>${h.terrainAmpl} м</span></div>
   <div class="kv ${overtop?'danger':''}"><span>Текущий уровень</span><span>${r.level[i].toFixed(2)} м</span></div>
   <div class="kv ${overtop?'danger':''}"><span>Текущая мощность</span><span>${r.power[i].toFixed(0)} МВт</span></div>
-  <div class="kv"><span>Выработка (за период)</span><span>${(r.kwh/1e9).toFixed(1)} млрд кВт·ч</span></div>`;
+  <div class="kv"><span>Выработка (за период)</span><span>${(r.kwh/1e9).toFixed(1)} млрд кВт·ч</span></div>
+  ${waveBlock}`;
 }
 
 function updateChart(){
@@ -1012,7 +1140,7 @@ function updateChart(){
 }
 
 /* ============================================================
-   15. АНИМАЦИЯ
+   16. АНИМАЦИЯ
    ============================================================ */
 function togglePlay(){
   S.playing = !S.playing;
@@ -1037,7 +1165,7 @@ function loop(t){
 }
 
 /* ============================================================
-   16. СТАРТ
+   17. СТАРТ
    ============================================================ */
 (async function boot(){
   buildUI();
