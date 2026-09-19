@@ -41,6 +41,15 @@ const CHART_WINDOW = 60;
 const CHART_THROTTLE_MS = 80;
 
 /* ============================================================
+   НАСТРОЙКИ ВОЛНЫ
+   MIRROR_LON_ONLY = true — зеркалит ТОЛЬКО долготу (запад-восток),
+                             широта (север-юг) остаётся как есть.
+   WAVE_SCALE = 0.75 — общий масштаб волны (0.75 = на 25% меньше).
+   ============================================================ */
+const MIRROR_LON_ONLY = true;
+const WAVE_SCALE = 0.75;
+
+/* ============================================================
    КАРТА
    ============================================================ */
 const map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([56.5, 60], 4);
@@ -118,6 +127,12 @@ function trimCourse(c, maxLen){
   return out;
 }
 
+/* Зеркалит ТОЛЬКО долготу относительно плотины.
+   Широта (север-юг) не меняется. */
+function mirrorCourseLonOnly(course, damLon){
+  return course.map(([lat, lon]) => [lat, 2*damLon - lon]);
+}
+
 async function fetchWithTimeout(url, ms=15000, opts={}){
   const ctrl=new AbortController();
   const timer=setTimeout(()=>ctrl.abort(), ms);
@@ -141,9 +156,9 @@ async function fetchWithRetry(url, ms=15000, tries=2){
 /* ============================================================
    КЭШ
    ============================================================ */
-const CACHE_KEY = 'ges_cache_v15';
-const RIVER_KEY_PREFIX = 'ges_river_v6_';
-const RES_KEY_PREFIX   = 'ges_res_v6_';
+const CACHE_KEY = 'ges_cache_v16';
+const RIVER_KEY_PREFIX = 'ges_river_v7_';
+const RES_KEY_PREFIX   = 'ges_res_v7_';
 const TTL = { history:12*3600*1000, forecast:30*60*1000, climate:7*24*3600*1000 };
 
 function readCacheAll(){ try{return JSON.parse(localStorage.getItem(CACHE_KEY)||'{}');}catch(e){return{};} }
@@ -226,11 +241,8 @@ async function overpassQuery(query, timeoutMs = 18000){
 }
 
 /* ============================================================
-   РУСЛО — с ГАРАНТИРОВАННЫМ ФОЛБЭКОМ
+   РУСЛО — фолбэк + зеркалирование долготы
    ============================================================ */
-
-/* Фолбэк: извилистая линия в направлении flowDir.
-   ВСЕГДА возвращает валидный курс. */
 function makeFallbackCourse(h, maxDistM){
   const points = [[h.lat, h.lon]];
   const n = 80;
@@ -244,7 +256,6 @@ function makeFallbackCourse(h, maxDistM){
 
   for (let i = 1; i <= n; i++){
     const t = i / n;
-    /* Меандр: 3 синусоиды разной частоты, амплитуда до ±0.7 рад (~40°) */
     const meander =
       Math.sin(t * Math.PI * 2.5 + seed)        * 0.55 +
       Math.sin(t * Math.PI * 5.7 + seed * 1.3)  * 0.30 +
@@ -258,6 +269,9 @@ function makeFallbackCourse(h, maxDistM){
     lon += dLon / (R * Math.cos(latR)) * 180 / Math.PI;
     points.push([lat, lon]);
   }
+
+  /* Зеркалим ТОЛЬКО долготу */
+  if (MIRROR_LON_ONLY) return mirrorCourseLonOnly(points, h.lon);
   return points;
 }
 
@@ -285,7 +299,6 @@ out geom;`;
     const data = await overpassQuery(query, 18000);
 
     if (data.elements && data.elements.length){
-      /* Все ways с геометрией и расстоянием до плотины */
       const ways = [];
       for (const el of data.elements){
         if (!el.geometry || el.geometry.length < 2) continue;
@@ -301,11 +314,7 @@ out geom;`;
       if (ways.length){
         ways.sort((a,b) => a.bestD - b.bestD);
         const w = ways[0];
-        let g = w.geom;
-
-        /* Определяем, в какую сторону идёт река.
-           Считаем направление от точки idx к idx+3 и к idx-3.
-           Сравниваем с flowDir. */
+        const g = w.geom;
         const idx = w.bestIdx;
         const cosLat = Math.cos(h.lat * Math.PI / 180);
         const flowRad = (h.flowDir || 180) * Math.PI / 180;
@@ -317,7 +326,6 @@ out geom;`;
         const dotA = (g[idxA][0]-g[idx][0])*fLat + (g[idxA][1]-g[idx][1])*fLon*cosLat;
         const dotB = (g[idxB][0]-g[idx][0])*fLat + (g[idxB][1]-g[idx][1])*fLon*cosLat;
 
-        /* Идём в ту сторону, где dot больше */
         const downstream = dotA >= dotB ? g.slice(idx) : g.slice(0, idx + 1).reverse();
 
         if (downstream.length >= 3){
@@ -330,11 +338,15 @@ out geom;`;
     console.warn(`OSM-русло ${h.name} не удалось: ${e.message}`);
   }
 
-  /* 3. Если OSM не дал — фолбэк */
+  /* 3. Если OSM не дал — фолбэк (внутри тоже зеркалит долготу) */
   if (!osmCourse){
     const params = getWaveParams(h);
     osmCourse = makeFallbackCourse(h, params.maxDist * 1.5);
-    console.log(`Русло ${h.name} — фолбэк по flowDir (${osmCourse.length} точек)`);
+    console.log(`Русло ${h.name} — фолбэк (${osmCourse.length} точек)`);
+  } else if (MIRROR_LON_ONLY){
+    /* OSM-курс: зеркалим только долготу */
+    osmCourse = mirrorCourseLonOnly(osmCourse, h.lon);
+    console.log(`Русло ${h.name} — OSM зеркалировано по долготе`);
   }
 
   /* 4. Обрезаем и кэшируем */
@@ -392,7 +404,6 @@ out geom;`;
       }
       if (!parts.length) continue;
 
-      /* Проверяем: НИ ОДНА точка не должна быть сильно ниже плотины */
       let maxDownstream = 0;
       let perim = 0, cLat = 0, cLon = 0, n = 0;
 
@@ -412,21 +423,17 @@ out geom;`;
       if (!n) continue;
       cLat /= n; cLon /= n;
 
-      /* Если что-то вылезает вниз по течению более 3 км — отбрасываем */
       if (maxDownstream > 3000) continue;
-
       if (perim < 2000) continue;
 
       const dist = haversineM(h.lat, h.lon, cLat, cLon);
       if (dist > 25000) continue;
 
-      /* Должен быть ВЫШЕ плотины */
       const dLat = cLat - h.lat;
       const dLon = (cLon - h.lon) * cosLat;
       const dotUp = dLat * upLat + dLon * upLon;
       if (dotUp < 0) continue;
 
-      /* Проверка имени */
       const nm = (el.tags?.name || '').toLowerCase();
       let nameMatch = 0;
       if (nameRoot && nm.includes(nameRoot)) nameMatch = 1;
@@ -659,7 +666,6 @@ async function loadPeriod(mode){
   });
   setStatus(`<span class="warn">загрузка</span> · ${mode}`);
 
-  /* Этап 1: из кэша */
   let fromCache = 0;
   HPPS.forEach(h => {
     const cached = getCached(mode, h.id);
@@ -685,10 +691,8 @@ async function loadPeriod(mode){
     }
   }
 
-  /* Этап 2: проверка API */
   if (apiAvailable === null) await pingAPI();
 
-  /* Этап 3: докачка */
   const missing = HPPS.filter(h => !S.cache[mode][h.id]);
   missing.sort((a,b) => {
     const ai = PRIORITY.indexOf(a.id), bi = PRIORITY.indexOf(b.id);
@@ -746,20 +750,24 @@ async function loadPeriod(mode){
 }
 
 /* ============================================================
-   ПАРАМЕТРЫ ВОЛНЫ — УВЕЛИЧЕНЫ
+   ПАРАМЕТРЫ ВОЛНЫ (с учётом WAVE_SCALE)
    ============================================================ */
 function getWaveParams(h){
   const a = h.terrainAmpl || 100;
+  let base;
   if (a > 300){
-    return { type:'горная', maxDist:60000, maxWidth:2000, speedMs:15,
+    base = { type:'горная', maxDist:60000, maxWidth:2000, speedMs:15,
              baseDuration:8, ringCount:4, description:'Узкая быстрая волна вдоль ущелья' };
-  }
-  if (a > 150){
-    return { type:'предгорная', maxDist:80000, maxWidth:4000, speedMs:8,
+  } else if (a > 150){
+    base = { type:'предгорная', maxDist:80000, maxWidth:4000, speedMs:8,
              baseDuration:10, ringCount:4, description:'Волна средней ширины' };
+  } else {
+    base = { type:'равнинная', maxDist:120000, maxWidth:8000, speedMs:3,
+             baseDuration:12, ringCount:5, description:'Широкая медленная волна по пойме' };
   }
-  return { type:'равнинная', maxDist:120000, maxWidth:8000, speedMs:3,
-           baseDuration:12, ringCount:5, description:'Широкая медленная волна по пойме' };
+  base.maxDist  = Math.round(base.maxDist  * WAVE_SCALE);
+  base.maxWidth = Math.round(base.maxWidth * WAVE_SCALE);
+  return base;
 }
 
 function makeBandPolygon(centerline, widthM, latRef){
@@ -822,14 +830,12 @@ async function startDamBreak(){
 
   const params = getWaveParams(h);
 
-  /* Русло: если нет в памяти — загружаем (с фолбэком) */
   if (!S.riverCourses[h.id]){
     showStatusMsg(`Загрузка русла ${h.river}…`);
     S.riverCourses[h.id] = await loadRiverCourse(h);
   }
   const course = S.riverCourses[h.id];
 
-  /* НЕ должно случиться, но на всякий случай */
   if (!course || course.length < 3){
     showStatusMsg('Не удалось построить русло');
     return;
@@ -884,7 +890,7 @@ function stopDamBreak(){
 }
 
 /* ============================================================
-   ВОДОХРАНИЛИЩЕ — с фолбэком-эллипсом
+   ВОДОХРАНИЛИЩЕ (с фолбэком-эллипсом)
    ============================================================ */
 function drawReservoir(h, i, lf, overtop){
   if (S.reservoirs[h.id]){ layerRes.removeLayer(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
@@ -899,7 +905,6 @@ function drawReservoir(h, i, lf, overtop){
   const osmPolys = S.reservoirsOSM[h.id];
 
   if (osmPolys && osmPolys.length){
-    /* Реальные полигоны из OSM */
     const group = L.layerGroup();
     osmPolys.forEach(parts => {
       parts.forEach(pts => {
@@ -914,12 +919,12 @@ function drawReservoir(h, i, lf, overtop){
     return;
   }
 
-  /* Фолбэк: эллипс, растянутый вдоль реки ВЫШЕ плотины */
+  /* Фолбэк-эллипс */
   const areaKm2 = r.area[i];
   const areaM2 = areaKm2 * 1e6;
-  const aspect = 3;   // 3:1 вдоль реки
-  const a = Math.sqrt(areaM2 * aspect / Math.PI);   // полуось вдоль реки
-  const b = Math.sqrt(areaM2 / (Math.PI * aspect)); // полуось поперёк
+  const aspect = 3;
+  const a = Math.sqrt(areaM2 * aspect / Math.PI);
+  const b = Math.sqrt(areaM2 / (Math.PI * aspect));
 
   const upRad = ((h.flowDir || 180) + 180) * Math.PI / 180;
   const upLat = Math.cos(upRad);
@@ -930,7 +935,6 @@ function drawReservoir(h, i, lf, overtop){
   const R = 6371000;
   const latR = h.lat * Math.PI / 180;
 
-  /* Центр эллипса — на расстоянии `a` вверх по течению */
   const cLat = h.lat + (a * upLat) / R * 180 / Math.PI;
   const cLon = h.lon + (a * upLon) / (R * Math.cos(latR)) * 180 / Math.PI;
 
@@ -940,10 +944,8 @@ function drawReservoir(h, i, lf, overtop){
     const ang = k * 2 * Math.PI / N;
     const localAlong  = a * Math.cos(ang);
     const localAcross = b * Math.sin(ang);
-
     const dLat = (localAlong * upLat + localAcross * perpLat) / R * 180 / Math.PI;
     const dLon = (localAlong * upLon + localAcross * perpLon) / (R * Math.cos(latR)) * 180 / Math.PI;
-
     pts.push([cLat + dLat, cLon + dLon]);
   }
 
@@ -1160,7 +1162,7 @@ function detailsHTML(h){
     ? `русло: ${Math.round(courseLength(course)/1000)} км`
     : (S.loadingRiver[h.id] ? 'русло загружается…' : 'русло не загружено');
   const resInfo = S.reservoirsOSM[h.id]
-    ? (S.reservoirsOSM[h.id].length ? `водохранилище: ${S.reservoirsOSM[h.id].length} объектов OSM` : 'водохранилище: фолбэк (эллипс)')
+    ? (S.reservoirsOSM[h.id].length ? `водохранилище: ${S.reservoirsOSM[h.id].length} объектов OSM` : 'водохранилище: фолбэк')
     : (S.loadingRes[h.id] ? 'водохранилище загружается…' : 'водохранилище: фолбэк');
 
   return `<h3>${h.name}</h3>
