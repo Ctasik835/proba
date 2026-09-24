@@ -147,7 +147,7 @@ async function fetchWithRetry(url, ms=10000, tries=2){
 /* ============================================================
    КЭШ
    ============================================================ */
-const CACHE_KEY = 'ges_cache_v16';
+const CACHE_KEY = 'ges_cache_v17';
 const RIVER_KEY_PREFIX = 'ges_river_v7_';
 const RES_KEY_PREFIX   = 'ges_res_v7_';
 const TTL = { history:12*3600*1000, forecast:30*60*1000, climate:7*24*3600*1000 };
@@ -268,6 +268,16 @@ function makeFallbackCourse(h, maxDistM){
 }
 
 async function loadRiverCourse(h){
+  const params = getWaveParams(h);
+
+  /* 0. Встроенное настоящее русло (rivers-data.js, снимок OSM) — приоритет:
+     всегда точное, доступно мгновенно и офлайн */
+  const emb = (typeof RIVER_COURSES !== 'undefined') ? RIVER_COURSES[h.id] : null;
+  if (emb && emb.length >= 3){
+    console.log(`Русло ${h.name} — встроенное (${emb.length} точек)`);
+    return trimCourse(emb, params.maxDist * 1.4);
+  }
+
   /* 1. Кэш */
   const key = RIVER_KEY_PREFIX + h.id;
   try {
@@ -280,8 +290,6 @@ async function loadRiverCourse(h){
       }
     }
   } catch(e){}
-
-  const params = getWaveParams(h);
   const RADIUS = Math.min(Math.round(params.maxDist * 1.3), 45000);
 
   /* 2. Пытаемся получить из OSM */
@@ -727,7 +735,21 @@ async function loadPeriod(mode){
     return;
   }
 
-  const queue = [...missing];
+  /* Фоновая ревалидация: кэш показываем мгновенно, но если он старше
+     порога — молча докачиваем свежие данные и обновляем отображение. */
+  const REVALIDATE_MS = { history: 3600e3, forecast: 10*60e3, climate: 24*3600e3 };
+  let stale = [];
+  if (apiAvailable){
+    const all = readCacheAll();
+    const now = Date.now();
+    stale = HPPS.filter(h => {
+      if (!S.cache[mode][h.id]) return false;
+      const e = all[mode]?.[h.id];
+      return e && (now - e.ts > REVALIDATE_MS[mode]);
+    });
+  }
+
+  const queue = [...missing, ...stale];
   let done = 0, countApi = 0, countSynth = 0;
 
   async function worker(){
@@ -757,7 +779,7 @@ async function loadPeriod(mode){
       recompute(); render();
 
       done++;
-      setStatus(`<span class="warn">докачка</span> · ${done}/${missing.length}`);
+      setStatus(`<span class="warn">докачка</span> · ${done}/${queue.length}`);
       await sleep(120);
     }
   }
@@ -1051,6 +1073,19 @@ function drawReservoir(h, i, lf, overtop){
 function buildUI(){
   const list = $('hppList');
   $('hppCount').textContent = `(${HPPS.length})`;
+
+  /* Кнопка ⟳: сбросить кэш данных и перезагрузить страницу за свежими данными */
+  $('refreshBtn').onclick = async () => {
+    setStatus('очистка кэша…');
+    try { localStorage.removeItem(CACHE_KEY); } catch(e){}
+    try {
+      if ('caches' in window){
+        const ks = await caches.keys();
+        await Promise.all(ks.map(k => caches.delete(k)));
+      }
+    } catch(e){}
+    location.reload();
+  };
   HPPS.forEach(h => {
     const item = document.createElement('div');
     item.className = 'hppItem';
