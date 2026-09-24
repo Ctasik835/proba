@@ -42,9 +42,10 @@ const CHART_THROTTLE_MS = 80;
 
 /* ============================================================
    НАСТРОЙКИ ВОЛНЫ
-   WAVE_SCALE = 0.75 — общий масштаб волны (0.75 = на 25% меньше).
+   WAVE_SCALE = 1.0 — общий масштаб волны (1.0 = полный размер,
+   ширины рассчитаны под реальные поймы рек).
    ============================================================ */
-const WAVE_SCALE = 0.75;
+const WAVE_SCALE = 1.0;
 
 /* ============================================================
    КАРТА
@@ -64,6 +65,7 @@ baseLayers['⛰ Рельеф (OpenTopoMap)'].addTo(map);
 L.control.layers(baseLayers, null, { position:'topright' }).addTo(map);
 
 const layerRes     = L.layerGroup().addTo(map);
+const layerFloodZone = L.layerGroup().addTo(map); // зона затопления (под волной)
 const layerFlood   = L.layerGroup().addTo(map);
 const layerMarkers = L.layerGroup().addTo(map);
 
@@ -190,16 +192,37 @@ function setCached(mode,id,data){
 /* ============================================================
    ПРОВЕРКА API
    ============================================================ */
+/* Проверяем ВСЕ используемые хосты Open-Meteo параллельно: доступность =
+   ответил хотя бы один. Одиночный короткий пинг, как раньше, при любой
+   сетевой заминке навсегда помечал приложение "офлайн". */
+let lastApiError = '';
 async function pingAPI(){
+  const probes = [
+    'https://api.open-meteo.com/v1/forecast?latitude=55&longitude=37&daily=temperature_2m_mean&forecast_days=1',
+    'https://archive-api.open-meteo.com/v1/archive?latitude=55&longitude=37&start_date=2024-01-01&end_date=2024-01-03&daily=temperature_2m_mean',
+    'https://flood-api.open-meteo.com/v1/flood?latitude=55&longitude=37&daily=river_discharge&forecast_days=1'
+  ].map(u => fetchWithTimeout(u, 8000));
   try {
-    await fetchWithTimeout(
-      'https://api.open-meteo.com/v1/forecast?latitude=55&longitude=37&daily=temperature_2m_mean&forecast_days=1',
-      4000);
+    await Promise.any(probes);
     apiAvailable = true;
   } catch(e){
     apiAvailable = false;
-    console.warn('Open-Meteo недоступен');
+    lastApiError = (e && e.errors && e.errors[0] && e.errors[0].message) || '';
+    console.warn('Open-Meteo недоступен:', lastApiError || e);
   }
+  ensureOfflineRetry();
+}
+
+/* Пока API недоступен — каждые 30 с молча перепроверяем; как только сеть
+   вернулась, автоматически докачиваем данные текущего режима. */
+let offlineRetryTimer = null;
+function ensureOfflineRetry(){
+  if (offlineRetryTimer) return;
+  offlineRetryTimer = setInterval(async () => {
+    if (apiAvailable !== false) return;
+    await pingAPI();
+    if (apiAvailable === true && !S.loading) loadPeriod(S.mode);
+  }, 30000);
 }
 
 /* ============================================================
@@ -559,6 +582,7 @@ async function loadStation(h, mode){
     setCached(mode, h.id, data);
     return { data, source: 'api' };
   } catch(e){
+    lastApiError = e.message || String(e);
     const stale = getStaleCached(mode, h.id);
     if (stale) return { data: stale, source: 'cache' };
     console.warn(`Станция ${h.name}: ${e.message}`);
@@ -721,7 +745,7 @@ async function loadPeriod(mode){
     }
   }
 
-  if (apiAvailable === null) await pingAPI();
+  if (apiAvailable !== true) await pingAPI();
 
   const missing = HPPS.filter(h => !S.cache[mode][h.id]);
   missing.sort((a,b) => {
@@ -788,7 +812,13 @@ async function loadPeriod(mode){
   const parts = [];
   if (fromCache) parts.push(`<span class="warn">🟡 ${fromCache} из кэша</span>`);
   if (countApi)  parts.push(`<span class="ok">🟢 ${countApi} онлайн</span>`);
-  if (countSynth)parts.push(`<span class="err">🔴 ${countSynth} офлайн</span>`);
+  if (countSynth){
+    parts.push(`<span class="err">🔴 ${countSynth} офлайн</span>`);
+    if (!countApi && !fromCache){
+      parts.push(`<span class="err">API недоступно${lastApiError ? ': '+lastApiError : ''}</span>`);
+      parts.push(`<span class="warn">повторная проверка каждые 30 с · или нажмите ⟳</span>`);
+    }
+  }
   setStatus(`<b>${mode}</b> · ${parts.join(' · ')}`);
   S.loading = false;
 }
@@ -800,13 +830,13 @@ function getWaveParams(h){
   const a = h.terrainAmpl || 100;
   let base;
   if (a > 300){
-    base = { type:'горная', maxDist:60000, maxWidth:2000, speedMs:15,
+    base = { type:'горная', maxDist:60000, maxWidth:4200, speedMs:15,
              baseDuration:8, ringCount:4, description:'Узкая быстрая волна вдоль ущелья' };
   } else if (a > 150){
-    base = { type:'предгорная', maxDist:80000, maxWidth:4000, speedMs:8,
+    base = { type:'предгорная', maxDist:80000, maxWidth:8000, speedMs:8,
              baseDuration:10, ringCount:4, description:'Волна средней ширины' };
   } else {
-    base = { type:'равнинная', maxDist:120000, maxWidth:8000, speedMs:3,
+    base = { type:'равнинная', maxDist:120000, maxWidth:15000, speedMs:3,
              baseDuration:12, ringCount:5, description:'Широкая медленная волна по пойме' };
   }
   base.maxDist  = Math.round(base.maxDist  * WAVE_SCALE);
@@ -819,36 +849,48 @@ function makeBandPolygon(centerline, widths, latRef){
   const latR = latRef*Math.PI/180;
   const degLat = 180/(Math.PI*R);
   const degLon = 180/(Math.PI*R*Math.cos(latR));
-  const left = [], right = [];
   const n = centerline.length;
+  const maxW = Math.max(...widths, 1);
+
+  /* Линия после Chaikin имеет шаг ~60 м. Если смещать её на ширину в
+     километры напрямую, любой поворот даёт самопересечение ("бабочку").
+     Поэтому для построения ленты используем СГЛАЖЕННУЮ центральную линию:
+     окно скользящего среднего ~55% максимальной ширины — кривизна
+     становится мягче полуширины и лента не складывается. */
+  let segSum = 0;
+  for (let i=1;i<n;i++){
+    segSum += Math.hypot(
+      (centerline[i][0]-centerline[i-1][0])/degLat,
+      (centerline[i][1]-centerline[i-1][1])/degLon);
+  }
+  const segAvg = Math.max(10, segSum/Math.max(1, n-1));
+  const winPts = Math.max(3, Math.round((maxW * 0.55) / segAvg));
+
+  const sm = new Array(n);
+  const halfW2 = Math.floor(winPts/2);
+  for (let i=0;i<n;i++){
+    const a = Math.max(0, i-halfW2), b = Math.min(n-1, i+halfW2);
+    let la=0, lo=0;
+    for (let j=a;j<=b;j++){ la+=centerline[j][0]; lo+=centerline[j][1]; }
+    const c = b-a+1;
+    sm[i] = [la/c, lo/c];
+  }
+
+  const left = [], right = [];
   for (let i=0;i<n;i++){
     let dLat, dLon;
-    if (i===0){ dLat=centerline[1][0]-centerline[0][0]; dLon=centerline[1][1]-centerline[0][1]; }
-    else if (i===n-1){ dLat=centerline[i][0]-centerline[i-1][0]; dLon=centerline[i][1]-centerline[i-1][1]; }
-    else { dLat=centerline[i+1][0]-centerline[i-1][0]; dLon=centerline[i+1][1]-centerline[i-1][1]; }
+    if (i===0){ dLat=sm[1][0]-sm[0][0]; dLon=sm[1][1]-sm[0][1]; }
+    else if (i===n-1){ dLat=sm[i][0]-sm[i-1][0]; dLon=sm[i][1]-sm[i-1][1]; }
+    else { dLat=sm[i+1][0]-sm[i-1][0]; dLon=sm[i+1][1]-sm[i-1][1]; }
     const dxM = dLon/degLon, dyM = dLat/degLat;
     const lenM = Math.hypot(dxM, dyM) || 1;
     const nxM = -dyM/lenM, nyM = dxM/lenM;
 
-    /* Ограничиваем полуширину длиной соседних отрезков русла — иначе
-       на резком повороте лента "выстреливает" за поворот и сама себя
-       пересекает (эффект "бабочки"). */
-    let segPrev = lenM, segNext = lenM;
-    if (i > 0){
-      const pdLat=(centerline[i][0]-centerline[i-1][0])/degLat, pdLon=(centerline[i][1]-centerline[i-1][1])/degLon;
-      segPrev = Math.hypot(pdLat,pdLon) || lenM;
-    }
-    if (i < n-1){
-      const ndLat=(centerline[i+1][0]-centerline[i][0])/degLat, ndLon=(centerline[i+1][1]-centerline[i][1])/degLon;
-      segNext = Math.hypot(ndLat,ndLon) || lenM;
-    }
-    const localLimit = Math.max(15, Math.min(segPrev, segNext) * 0.9);
-    const halfW = Math.min((widths[i] ?? widths[widths.length-1])/2, localLimit);
-
+    const halfW = Math.max(15, (widths[i] ?? widths[widths.length-1])/2);
     const offLat = nyM*halfW*degLat;
     const offLon = nxM*halfW*degLon;
-    left.push([centerline[i][0]+offLat, centerline[i][1]+offLon]);
-    right.push([centerline[i][0]-offLat, centerline[i][1]-offLon]);
+    left.push([sm[i][0]+offLat, sm[i][1]+offLon]);
+    right.push([sm[i][0]-offLat, sm[i][1]-offLon]);
   }
   return [...left, ...right.reverse()];
 }
@@ -889,15 +931,35 @@ function makeFloodWaveFromCourse(h, course, progress){
   if (trimmed.length < 2) return null;
   trimmed = chaikinSmooth(trimmed, 2);
   const n = trimmed.length;
-  const W = params.maxWidth * ramp * (0.4 + 0.6 * decay);
+  const W = params.maxWidth * ramp * (0.45 + 0.55 * decay);
   const widths = trimmed.map((_, i) => {
     const s = n > 1 ? i/(n-1) : 0;             // 0 — плотина, 1 — фронт
-    const taper = 1 - 0.72 * Math.pow(s, 0.9); // затухание к переднему краю
+    const taper = 1 - 0.6 * Math.pow(s, 0.85); // затухание к переднему краю
     const snout = s > 0.88 ? 0.25 + 0.75*(1-s)/0.12 : 1; // острый нос
-    return Math.max(10, W * taper * snout);
+    const startRamp = s < 0.04 ? 0.25 + 0.75*s/0.04 : 1; // сужение у плотины (без «воротника»)
+    return Math.max(10, W * taper * snout * startRamp);
   });
   const pts = makeBandPolygon(trimmed, widths, h.lat);
   return { pts, params, front: trimmed[n-1], decay };
+}
+
+/* Максимальный охват затопления: лента по ВСЕЙ достижимой части русла
+   без запуска/затухания — то, что волна в итоге зальёт. Рисуется один
+   раз под движущейся волной бледным слоем «зона затопления». */
+function makeFloodFootprint(h, course){
+  const params = getWaveParams(h);
+  let trimmed = chaikinSmooth(course, 2);
+  const n = trimmed.length;
+  if (n < 2) return null;
+  const W = params.maxWidth * 1.1;
+  const widths = trimmed.map((_, i) => {
+    const s = n > 1 ? i/(n-1) : 0;
+    const taper = 1 - 0.55 * Math.pow(s, 0.85);
+    const snout = s > 0.96 ? 0.3 + 0.7*(1-s)/0.04 : 1;
+    const startRamp = s < 0.04 ? 0.25 + 0.75*s/0.04 : 1;
+    return Math.max(10, W * taper * snout * startRamp);
+  });
+  return { pts: makeBandPolygon(trimmed, widths, h.lat), params };
 }
 
 /* ============================================================
@@ -922,9 +984,21 @@ async function startDamBreak(){
   }
 
   layerFlood.clearLayers();
+  layerFloodZone.clearLayers();
+
+  /* Зона затопления: полный охват волны, бледным цветом под движущейся
+     волной — сразу видно, какие территории окажутся под водой. */
+  const footprint = makeFloodFootprint(h, course);
+  if (footprint){
+    L.polygon(footprint.pts, {
+      color:'#ff8a3d', weight:1, opacity:0.45, dashArray:'6 5',
+      fillColor:'#ffab5e', fillOpacity:0.13, interactive:false
+    }).addTo(layerFloodZone);
+  }
+
   const duration = Math.max(12, params.baseDuration * 1.25);
   S.damBreak = { id:h.id, progress:0, start:performance.now(), duration, course };
-  $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · ${(courseLength(course)/1000).toFixed(0)} км`;
+  $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${(courseLength(course)/1000).toFixed(0)} км вниз по течению`;
   $('alertBanner').classList.add('show');
 
   recompute(); render();
@@ -954,10 +1028,11 @@ async function startDamBreak(){
     if (S.damBreak.progress < 1) requestAnimationFrame(step);
     else setTimeout(() => {
       layerFlood.clearLayers();
+      layerFloodZone.clearLayers();
       $('alertBanner').classList.remove('show');
       S.damBreak = null;
       $('details').innerHTML = detailsHTML(h);
-    }, 1800);
+    }, 2200);
   }
   requestAnimationFrame(step);
 }
@@ -965,6 +1040,7 @@ async function startDamBreak(){
 function stopDamBreak(){
   S.damBreak = null;
   layerFlood.clearLayers();
+  layerFloodZone.clearLayers();
   $('alertBanner').classList.remove('show');
 }
 
