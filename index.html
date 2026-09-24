@@ -23,7 +23,7 @@
 </div>
 
 <div id="alertBanner">💥 ПРОРЫВ ПЛОТИНЫ</div>
-<div id="statusBar"><b>Статус:</b> <span id="statusText">инициализация…</span></div>
+<div id="statusBar"><b>Статус:</b> <span id="statusText">инициализация…</span><button id="refreshBtn" title="Обновить данные (сбросить кэш)">⟳</button></div>
 
 <aside id="sidebar">
   <header>Сценарии</header>
@@ -73,6 +73,7 @@ if ('serviceWorker' in navigator){
   });
 }
 </script>
+<script src="rivers-data.js"></script>
 <script src="reservoirs-data.js"></script>
 <script src="app.js"></script>
 </body>
