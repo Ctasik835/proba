@@ -944,9 +944,9 @@ function drawReservoir(h, i, lf, overtop){
   if (!r) return;
 
   let color, fill, op;
-  if (overtop){ color='#ff3b3b'; fill='#ff6b6b'; op=0.35; }
-  else if (lf > 0.75){ color='#31c9ff'; fill='#31c9ff'; op=0.20; }
-  else { color='#31c9ff'; fill='#31c9ff'; op=0.13; }
+  if (overtop){ color='#ff3b3b'; fill='#ff5252'; op=0.5; }
+  else if (lf > 0.75){ color='#16b5ff'; fill='#2fc4ff'; op=0.35; }
+  else { color='#16b5ff'; fill='#2fc4ff'; op=0.26; }
 
   /* 1) Встроенные реальные контуры (reservoirs-data.js, снимок OSM) — приоритет */
   const embedded = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
@@ -954,7 +954,7 @@ function drawReservoir(h, i, lf, overtop){
     const group = L.layerGroup();
     embedded.forEach(ring => {
       L.polygon(ring, {
-        color: color, weight: 1, opacity: 0.55,
+        color: color, weight: 1.6, opacity: 0.9,
         fillColor: fill, fillOpacity: op, interactive: false
       }).addTo(group);
     });
@@ -971,7 +971,7 @@ function drawReservoir(h, i, lf, overtop){
     osmPolys.forEach(parts => {
       parts.forEach(pts => {
         L.polygon(pts, {
-          color: color, weight: 1, opacity: 0.55,
+          color: color, weight: 1.6, opacity: 0.9,
           fillColor: fill, fillOpacity: op, interactive: false
         }).addTo(group);
       });
@@ -1012,7 +1012,7 @@ function drawReservoir(h, i, lf, overtop){
   }
 
   const poly = L.polygon(pts, {
-    color: color, weight: 1, opacity: 0.55,
+    color: color, weight: 1.6, opacity: 0.9,
     fillColor: fill, fillOpacity: op, interactive: false
   }).addTo(layerRes);
   S.reservoirs[h.id] = poly;
