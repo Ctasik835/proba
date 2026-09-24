@@ -850,24 +850,32 @@ function chaikinSmooth(course, iterations=1){
 }
 
 function makeFloodWaveFromCourse(h, course, progress){
-  if (progress <= 0 || progress >= 1) return null;
+  /* progress 0..1. Фронт движется вдоль реки с ПОСТОЯННОЙ скоростью (без
+     искусственных степенных искажений времени). Форма волны — как у реальной
+     волны прорыва: максимальная ширина у плотины (там продолжается истечение),
+     плавное сужение к фронту и острый «нос» у переднего края. В первые 10%
+     времени волна разгоняется (ramp), в последние ~22% — затухает (decay):
+     и ширина, и прозрачность спадают, вместо резкого исчезновения. */
+  if (progress <= 0.001) return null;
   const params = getWaveParams(h);
-  const fraction = Math.pow(progress, 0.7);
-  const targetLen = courseLength(course) * fraction;
-  if (targetLen < 300) return null;
-  let trimmed = trimCourse(course, targetLen);
+  const totalLen = courseLength(course);
+  const ramp  = Math.min(1, progress / 0.1);
+  const decay = progress > 0.78 ? Math.max(0, 1 - (progress - 0.78) / 0.22) : 1;
+  const frontLen = totalLen * Math.min(1, progress);
+  if (frontLen < 250) return null;
+  let trimmed = trimCourse(course, frontLen);
   if (trimmed.length < 2) return null;
   trimmed = chaikinSmooth(trimmed, 2);
   const n = trimmed.length;
-  const maxWidth = params.maxWidth * Math.min(1, progress * 1.6);
-  /* Ширина растёт непрерывно от плотины (0.35×) к фронту волны (1×) —
-     без деления на куски, поэтому лента остаётся одним гладким полигоном. */
+  const W = params.maxWidth * ramp * (0.4 + 0.6 * decay);
   const widths = trimmed.map((_, i) => {
-    const t = n > 1 ? i/(n-1) : 1;
-    return maxWidth * (0.35 + 0.65*t);
+    const s = n > 1 ? i/(n-1) : 0;             // 0 — плотина, 1 — фронт
+    const taper = 1 - 0.72 * Math.pow(s, 0.9); // затухание к переднему краю
+    const snout = s > 0.88 ? 0.25 + 0.75*(1-s)/0.12 : 1; // острый нос
+    return Math.max(10, W * taper * snout);
   });
   const pts = makeBandPolygon(trimmed, widths, h.lat);
-  return { pts, params, front: trimmed[n-1] };
+  return { pts, params, front: trimmed[n-1], decay };
 }
 
 /* ============================================================
@@ -892,7 +900,8 @@ async function startDamBreak(){
   }
 
   layerFlood.clearLayers();
-  S.damBreak = { id:h.id, progress:0, start:performance.now(), duration:params.baseDuration, course };
+  const duration = Math.max(12, params.baseDuration * 1.25);
+  S.damBreak = { id:h.id, progress:0, start:performance.now(), duration, course };
   $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · ${(courseLength(course)/1000).toFixed(0)} км`;
   $('alertBanner').classList.add('show');
 
@@ -907,15 +916,17 @@ async function startDamBreak(){
 
     const wave = makeFloodWaveFromCourse(h, course, S.damBreak.progress);
     if (wave){
-      const fade = 1 - S.damBreak.progress * 0.5;
+      const fade = wave.decay;
       L.polygon(wave.pts, {
-        color:'#ff3b3b', weight:1.5, opacity:0.85,
-        fillColor:'#ff5a5a', fillOpacity:0.28*fade, interactive:false
+        color:'#ff3b3b', weight:1.5, opacity:0.8*fade + 0.1,
+        fillColor:'#ff5a5a', fillOpacity:0.30*fade, interactive:false
       }).addTo(layerFlood);
-      L.circleMarker(wave.front, {
-        radius:6, color:'#ff1a1a', weight:2.5, opacity:0.95,
-        fillColor:'#ff5a5a', fillOpacity:0.9, interactive:false
-      }).addTo(layerFlood);
+      if (wave.decay > 0.05){
+        L.circleMarker(wave.front, {
+          radius: 4 + 4*wave.decay, color:'#ff1a1a', weight:2.5, opacity:0.95*fade,
+          fillColor:'#ff5a5a', fillOpacity:0.9*fade, interactive:false
+        }).addTo(layerFlood);
+      }
     }
     render();
     if (S.damBreak.progress < 1) requestAnimationFrame(step);
@@ -924,7 +935,7 @@ async function startDamBreak(){
       $('alertBanner').classList.remove('show');
       S.damBreak = null;
       $('details').innerHTML = detailsHTML(h);
-    }, 6000);
+    }, 1800);
   }
   requestAnimationFrame(step);
 }
@@ -949,10 +960,26 @@ function drawReservoir(h, i, lf, overtop){
   else { color='#16b5ff'; fill='#2fc4ff'; op=0.26; }
 
   /* 1) Встроенные реальные контуры (reservoirs-data.js, снимок OSM) — приоритет */
-  const embedded = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
-  if (embedded && embedded.length){
+  const g = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
+  if (g){
+    /* Выбор контура: n — норма, d — засуха (вода отступила), f — паводок (разлив).
+       По моделируемой площади зеркала k=A/А_НПУ с гистерезисом против мерцания;
+       сценарии паводок/засуха форсируют соответствующий контур. */
+    if (!S.resVar) S.resVar = {};
+    const k = r.area[i] / h.areaNMU;
+    let vi = S.resVar[h.id] ?? 1;
+    if (S.scenario === 'drought') vi = (k > 1.05) ? 2 : 0;
+    else if (S.scenario === 'flood') vi = (k < 0.5) ? 0 : 2;
+    else {
+      if (k < 0.55) vi = 0;
+      else if (k > 0.62 && k < 1.05) vi = 1;
+      else if (k > 1.08) vi = 2;
+    }
+    S.resVar[h.id] = vi;
+    const gn = Array.isArray(g) ? g : (g.n || []);
+    const rings = Array.isArray(g) ? g : ([g.d, g.n, g.f][vi] || gn);
     const group = L.layerGroup();
-    embedded.forEach(ring => {
+    rings.forEach(ring => {
       L.polygon(ring, {
         color: color, weight: 1.6, opacity: 0.9,
         fillColor: fill, fillOpacity: op, interactive: false
@@ -1224,7 +1251,8 @@ function detailsHTML(h){
   const courseInfo = course
     ? `русло: ${Math.round(courseLength(course)/1000)} км`
     : (S.loadingRiver[h.id] ? 'русло загружается…' : 'русло не загружено');
-  const resEmbedded = (typeof RESERVOIR_GEOMETRY !== 'undefined' && RESERVOIR_GEOMETRY[h.id]?.length);
+  const gg = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
+  const resEmbedded = !!(gg && (Array.isArray(gg) ? gg.length : (gg.n && gg.n.length)));
   const resInfo = resEmbedded
     ? `водохранилище: реальный контур OSM (встроен)`
     : S.reservoirsOSM[h.id]
