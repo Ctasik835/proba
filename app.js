@@ -948,6 +948,22 @@ function drawReservoir(h, i, lf, overtop){
   else if (lf > 0.75){ color='#31c9ff'; fill='#31c9ff'; op=0.20; }
   else { color='#31c9ff'; fill='#31c9ff'; op=0.13; }
 
+  /* 1) Встроенные реальные контуры (reservoirs-data.js, снимок OSM) — приоритет */
+  const embedded = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
+  if (embedded && embedded.length){
+    const group = L.layerGroup();
+    embedded.forEach(ring => {
+      L.polygon(ring, {
+        color: color, weight: 1, opacity: 0.55,
+        fillColor: fill, fillOpacity: op, interactive: false
+      }).addTo(group);
+    });
+    group.addTo(layerRes);
+    S.reservoirs[h.id] = group;
+    return;
+  }
+
+  /* 2) Контур, полученный из Overpass в реальном времени */
   const osmPolys = S.reservoirsOSM[h.id];
 
   if (osmPolys && osmPolys.length){
@@ -1180,7 +1196,8 @@ async function selectHPP(id, fromList){
       return c;
     }).catch(() => { delete S.loadingRiver[h.id]; });
   }
-  if (!S.reservoirsOSM[h.id] && !S.loadingRes[h.id]){
+  const embeddedRes = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
+  if (!embeddedRes && !S.reservoirsOSM[h.id] && !S.loadingRes[h.id]){
     S.loadingRes[h.id] = loadReservoirOSM(h).then(p => {
       S.reservoirsOSM[h.id] = p; delete S.loadingRes[h.id];
       if (S.selected === h.id) render();
@@ -1207,9 +1224,12 @@ function detailsHTML(h){
   const courseInfo = course
     ? `русло: ${Math.round(courseLength(course)/1000)} км`
     : (S.loadingRiver[h.id] ? 'русло загружается…' : 'русло не загружено');
-  const resInfo = S.reservoirsOSM[h.id]
-    ? (S.reservoirsOSM[h.id].length ? `водохранилище: ${S.reservoirsOSM[h.id].length} объектов OSM` : 'водохранилище: фолбэк')
-    : (S.loadingRes[h.id] ? 'водохранилище загружается…' : 'водохранилище: фолбэк');
+  const resEmbedded = (typeof RESERVOIR_GEOMETRY !== 'undefined' && RESERVOIR_GEOMETRY[h.id]?.length);
+  const resInfo = resEmbedded
+    ? `водохранилище: реальный контур OSM (встроен)`
+    : S.reservoirsOSM[h.id]
+      ? (S.reservoirsOSM[h.id].length ? `водохранилище: ${S.reservoirsOSM[h.id].length} объектов OSM` : 'водохранилище: фолбэк')
+      : (S.loadingRes[h.id] ? 'водохранилище загружается…' : 'водохранилище: фолбэк');
 
   return `<h3>${h.name}</h3>
   <div style="font-size:11px;margin-bottom:6px">${srcLabel}</div>
