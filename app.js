@@ -991,8 +991,8 @@ async function startDamBreak(){
   const footprint = makeFloodFootprint(h, course);
   if (footprint){
     L.polygon(footprint.pts, {
-      color:'#ff8a3d', weight:1, opacity:0.45, dashArray:'6 5',
-      fillColor:'#ffab5e', fillOpacity:0.13, interactive:false
+      color:'#ff9400', weight:1.5, opacity:0.85, dashArray:'7 5',
+      fillColor:'#ffa726', fillOpacity:0.28, interactive:false
     }).addTo(layerFloodZone);
   }
 
@@ -1056,6 +1056,11 @@ function drawReservoir(h, i, lf, overtop){
   if (overtop){ color='#ff3b3b'; fill='#ff5252'; op=0.5; }
   else if (lf > 0.75){ color='#16b5ff'; fill='#2fc4ff'; op=0.35; }
   else { color='#16b5ff'; fill='#2fc4ff'; op=0.26; }
+
+  /* Сценарная подсветка: паводок — красный, засуха — жёлтый (контур
+     при этом всё равно морфится по вариантам n/d/f чуть ниже). */
+  if (S.scenario === 'flood'){ color='#ff2222'; fill='#ff4545'; op=0.45; }
+  else if (S.scenario === 'drought'){ color='#ffb300'; fill='#ffd54a'; op=0.4; }
 
   /* 1) Встроенные реальные контуры (reservoirs-data.js, снимок OSM) — приоритет */
   const g = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
