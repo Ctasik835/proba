@@ -3,39 +3,24 @@
    flowDir — направление течения вниз по реке (0=С, 90=В, 180=Ю).
    ============================================================ */
 const HPPS = [
-  {id:'volzh', name:'Волжская ГЭС', river:'Волга', lat:48.8244, lon:44.6767, flowDir:180,
-   capacityMW:2671, head:20, nmu:15, umo:12.5, areaNMU:3117, totalVolume:31.5, usefulVolume:6.5,
-   eff:.93, year:1961, terrainAmpl:80, reservoirName:'Волгоградское'},
-  {id:'zhig', name:'Жигулёвская ГЭС', river:'Волга', lat:53.4264, lon:49.4794, flowDir:90,
-   capacityMW:2488, head:21, nmu:53, umo:49, areaNMU:6450, totalVolume:58, usefulVolume:21,
-   eff:.93, year:1957, terrainAmpl:150, reservoirName:'Куйбышевское'},
-  {id:'sar', name:'Саратовская ГЭС', river:'Волга', lat:52.0481, lon:47.7622, flowDir:190,
-   capacityMW:1403, head:15, nmu:28, umo:25, areaNMU:1831, totalVolume:12.9, usefulVolume:4.5,
-   eff:.92, year:1968, terrainAmpl:60, reservoirName:'Саратовское'},
-  {id:'cheb', name:'Чебоксарская ГЭС', river:'Волга', lat:56.1373, lon:47.4661, flowDir:90,
-   capacityMW:1370, head:14, nmu:63, umo:61, areaNMU:2182, totalVolume:13.8, usefulVolume:3.6,
-   eff:.92, year:1986, terrainAmpl:70, reservoirName:'Чебоксарское'},
-  {id:'nnov', name:'Нижегородская ГЭС', river:'Волга', lat:56.6506, lon:43.3756, flowDir:100,
-   capacityMW:530, head:16, nmu:84, umo:81, areaNMU:1590, totalVolume:8.7, usefulVolume:3.9,
-   eff:.91, year:1956, terrainAmpl:60, reservoirName:'Горьковское'},
-  {id:'votk', name:'Воткинская ГЭС', river:'Кама', lat:56.7919, lon:54.0839, flowDir:190,
-   capacityMW:1100, head:18, nmu:89, umo:86, areaNMU:1120, totalVolume:9.4, usefulVolume:2.8,
-   eff:.92, year:1963, terrainAmpl:100, reservoirName:'Воткинское'},
-  {id:'kam', name:'Камская ГЭС', river:'Кама', lat:58.1146, lon:56.3289, flowDir:200,
-   capacityMW:552, head:17, nmu:108.5, umo:103.5, areaNMU:1910, totalVolume:12.2, usefulVolume:7.9,
-   eff:.91, year:1958, terrainAmpl:120, reservoirName:'Камское'},
-  {id:'ssh', name:'Саяно-Шушенская ГЭС', river:'Енисей', lat:52.8267, lon:91.3725, flowDir:0,
-   capacityMW:6400, head:194, nmu:540, umo:500, areaNMU:621, totalVolume:31.3, usefulVolume:15.3,
-   eff:.94, year:1985, terrainAmpl:900, reservoirName:'Саяно-Шушенское'},
-  {id:'kras', name:'Красноярская ГЭС', river:'Енисей', lat:55.9367, lon:92.2956, flowDir:0,
-   capacityMW:6000, head:93, nmu:243, umo:225, areaNMU:2000, totalVolume:73.3, usefulVolume:20,
-   eff:.94, year:1972, terrainAmpl:400, reservoirName:'Красноярское'},
-  {id:'bratsk', name:'Братская ГЭС', river:'Ангара', lat:56.2861, lon:101.7842, flowDir:10,
-   capacityMW:4500, head:100, nmu:402, umo:392, areaNMU:5470, totalVolume:169.3, usefulVolume:48,
-   eff:.94, year:1967, terrainAmpl:350, reservoirName:'Братское'}
+  /* Новые ГТС Северного Кавказа (данные: РусГидро/Википедия + проектная таблица).
+     Гизельдонская: координаты плотины у завала Кахты-Сар; напор 289 м — деривационный.
+     Баксанская: координаты головного узла (волна от водосливной плотины). */
+  {id:'giz', name:'Гизельдонская ГЭС', river:'Гизельдон', lat:42.8785, lon:44.4503, flowDir:15,
+   capacityMW:22.8, head:289, nmu:1176, umo:1175.73, areaNMU:10.81, totalVolume:0.015, usefulVolume:0.00293,
+   eff:.85, year:1934, terrainAmpl:800, reservoirName:'Гизельдонское',
+   damType:'грунтовая каменно-набросная, 21,5 м'},
+  {id:'gun', name:'Гунибская ГЭС им. Р. Гамзатова', river:'Каракойсу', lat:42.4317, lon:46.9869, flowDir:5,
+   capacityMW:15, head:110, nmu:863.5, umo:862, areaNMU:0.6, totalVolume:0.01058, usefulVolume:0.00087,
+   eff:.93, year:2005, terrainAmpl:600, reservoirName:'Гунибское',
+   damType:'бетонная арочная с пробкой, 73,3 м'},
+  {id:'bak', name:'Баксанская ГЭС', river:'Баксан', lat:43.6056, lon:43.3056, flowDir:76,
+   capacityMW:27, head:88.53, nmu:647.2, umo:645, areaNMU:0.072, totalVolume:0.00016, usefulVolume:0.00015,
+   eff:.93, year:1936, terrainAmpl:900, reservoirName:'Баксанский БСР',
+   damType:'бетонная водосливная, ≈6 м'}
 ];
 
-const PRIORITY = ['ssh', 'kras', 'bratsk', 'volzh', 'zhig'];
+const PRIORITY = ['giz', 'gun', 'bak'];
 const HISTORY_START = '2023-01-01';
 const CHART_WINDOW = 60;
 const CHART_THROTTLE_MS = 80;
@@ -50,7 +35,7 @@ const WAVE_SCALE = 1.0;
 /* ============================================================
    КАРТА
    ============================================================ */
-const map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([56.5, 60], 4);
+const map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([43.15, 44.95], 8);
 
 const baseLayers = {
   '🌍 OpenStreetMap': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -149,7 +134,7 @@ async function fetchWithRetry(url, ms=10000, tries=2){
 /* ============================================================
    КЭШ
    ============================================================ */
-const CACHE_KEY = 'ges_cache_v17';
+const CACHE_KEY = 'ges_cache_v18';
 const RIVER_KEY_PREFIX = 'ges_river_v7_';
 const RES_KEY_PREFIX   = 'ges_res_v7_';
 const TTL = { history:12*3600*1000, forecast:30*60*1000, climate:7*24*3600*1000 };
@@ -1384,11 +1369,12 @@ function detailsHTML(h){
   <div class="kv"><span>Координаты плотины</span><span>${h.lat.toFixed(4)}, ${h.lon.toFixed(4)}</span></div>
   <div class="kv"><span>Течение (flowDir)</span><span>${h.flowDir}°</span></div>
   <div class="kv"><span>Установленная мощность</span><span>${h.capacityMW} МВт</span></div>
+  <div class="kv"><span>Тип плотины</span><span>${h.damType || '—'}</span></div>
   <div class="kv"><span>Расчётный напор</span><span>${h.head} м</span></div>
   <div class="kv"><span>НПУ / УМО</span><span>${h.nmu} / ${h.umo} м</span></div>
   <div class="kv ${overtop?'danger':''}"><span>Текущий уровень</span><span>${r.level[i].toFixed(2)} м</span></div>
   <div class="kv ${overtop?'danger':''}"><span>Текущая мощность</span><span>${r.power[i].toFixed(0)} МВт</span></div>
-  <div class="kv"><span>Выработка</span><span>${(r.kwh/1e9).toFixed(1)} млрд кВт·ч</span></div>
+  <div class="kv"><span>Выработка</span><span>${r.kwh/1e9 >= 0.05 ? (r.kwh/1e9).toFixed(1)+' млрд кВт·ч' : (r.kwh/1e6).toFixed(0)+' млн кВт·ч'}</span></div>
   <div style="margin-top:8px;padding:8px 10px;background:rgba(255,59,59,.08);border:1px solid rgba(255,59,59,.25);border-radius:8px;font-size:11px;line-height:1.5">
     <div style="color:#ff6b6b;font-weight:700;margin-bottom:4px">🌊 Волна прорыва — ${wp.type}</div>
     <div>${wp.description}</div>
