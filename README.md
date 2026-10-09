@@ -39,6 +39,6 @@ Settings → Pages → Source: *Deploy from a branch* → `main` / `(root)` → 
 | `reservoirs-data.js` | реальные контуры водохранилищ (снимок OSM, упрощённые полигоны) |
 | `rivers-data.js` | центрлинии русел ниже плотин (OSM, офлайн-снимок) |
 | `terrain-data.js` | профиль дна русла (DEM-отметки Open-Meteo/SRTM) для расчёта прорыва |
-| `sw.js` | service worker (кэширование, офлайн) |
+| `sw.js` | service worker (кэширование, офлайн; v13) |
 
 Данные контуров: © OpenStreetMap contributors (ODbL).
