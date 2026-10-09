@@ -78,6 +78,15 @@ function initMap(){
 
 /* хелпер полигона в стиле Leaflet-вызовов: кольцо [ [lat,lon], ... ] */
 function polyAdd(collection, ring, o){
+  try { return polyAddUnsafe(collection, ring, o); }
+  catch(e){ console.warn('polyAdd:', e.message); return null; }
+}
+function polyAddUnsafe(collection, ring, o){
+  if (!collection || !Array.isArray(ring) || ring.length < 3) return null;
+  /* замкнуть кольцо и выкинуть NaN */
+  ring = ring.filter(p => p && isFinite(p[0]) && isFinite(p[1]));
+  if (ring.length < 3) return null;
+  if (ring[0][0] !== ring[ring.length-1][0] || ring[0][1] !== ring[ring.length-1][1]) ring = ring.concat([ring[0]]);
   const p = new ymaps.Polygon([ring], {}, {
     fillColor: o.fill || o.fillColor || '#000000',
     fillOpacity: o.fillOpacity ?? 0.3,
@@ -1213,6 +1222,7 @@ async function startDamBreak(){
     $('alertBanner').classList.add('show');
     recompute(); render();
     $('details').innerHTML = detailsHTML(h);
+    if (S.markers[h.id]) S.markers[h.id].balloon.open();
 
     let fi = 0;
     function step(tNow){
@@ -1233,12 +1243,14 @@ async function startDamBreak(){
           color:'#ff3b3b', weight:1.5, opacity:0.85,
           fill:'#ff5a5a', fillOpacity:0.26 + 0.22*depth
         });
-        const fc = new ymaps.Circle([sim.line[upto], 260], null, {
-          fillColor:'#ff5a5a', fillOpacity:0.9,
-          strokeColor:'#ff1a1a', strokeWidth:2.5, strokeOpacity:0.95,
-          hasHint: false, hasBalloon: false, zIndex: 3100
-        });
-        layerFlood.add(fc);
+        try {
+          const fc = new ymaps.Circle([sim.line[upto], 260], null, {
+            fillColor:'#ff5a5a', fillOpacity:0.9,
+            strokeColor:'#ff1a1a', strokeWidth:2.5, strokeOpacity:0.95,
+            hasHint: false, hasBalloon: false, zIndex: 3100
+          });
+          layerFlood.add(fc);
+        } catch(e){ console.warn('front circle:', e.message); }
       }
       $('alertBanner').innerHTML =
         `💥 ПРОРЫВ · Сен-Венан 1D · t+${fmtT(fr.t)} · фронт ${(fr.front*sim.ds/1000).toFixed(1)} км` +
@@ -1267,6 +1279,7 @@ async function startDamBreak(){
     });
   }
 
+  if (S.markers[h.id]) S.markers[h.id].balloon.open();
   const duration = Math.max(12, params.baseDuration * 1.25);
   S.damBreak = { id:h.id, progress:0, start:performance.now(), duration, course };
   $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${(courseLength(course)/1000).toFixed(0)} км вниз по течению`;
@@ -1576,8 +1589,13 @@ async function selectHPP(id, fromList){
   $('chartTitle').textContent = h.name;
   $('chartSub').textContent = `р. ${h.river}`;
 
-  if (fromList && map) map.setCenter([h.lat, h.lon], Math.max(map.getZoom(), 7), { duration: 700 });
-  if (S.markers[id]) S.markers[id].balloon.open();
+  if (map){
+    /* станцию ставим в «чистую» область экрана (правее и выше панелей), а не в центр */
+    const pos = [Math.round(window.innerWidth * 0.64), Math.round(window.innerHeight * 0.52)];
+    if (fromList) map.setCenter([h.lat, h.lon], Math.max(map.getZoom(), 7), { duration: 700, position: pos });
+    /* балун открываем после завершения панорамы, чтобы он не улетал за панели */
+    setTimeout(() => { const m = S.markers[id]; if (m) m.balloon.open(); }, fromList ? 750 : 0);
+  }
 
   if (!S.cache[S.mode]?.[id] && !S.loadingStation[id] && apiAvailable !== false){
     S.loadingStation[id] = true;
