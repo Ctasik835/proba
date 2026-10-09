@@ -9,14 +9,19 @@ const HPPS = [
   {id:'giz', name:'Гизельдонская ГЭС', river:'Гизельдон', lat:42.8785, lon:44.4503, flowDir:15,
    capacityMW:22.8, head:289, nmu:1176, umo:1175.73, areaNMU:10.81, totalVolume:0.015, usefulVolume:0.00293,
    eff:.85, year:1934, terrainAmpl:800, reservoirName:'Гизельдонское',
+   resCoords:'42°52′34″ N, 44°26′57″ E',
+   damH:21.5, breachW:100, chanW0:30, chanW1:140,
    damType:'грунтовая каменно-набросная, 21,5 м'},
   {id:'gun', name:'Гунибская ГЭС им. Р. Гамзатова', river:'Каракойсу', lat:42.4317, lon:46.9869, flowDir:5,
    capacityMW:15, head:110, nmu:863.5, umo:862, areaNMU:0.6, totalVolume:0.01058, usefulVolume:0.00087,
    eff:.93, year:2005, terrainAmpl:600, reservoirName:'Гунибское',
+   resCoords:'42°25′13″ N, 46°58′44″ E',
+   damH:73.3, breachW:45, chanW0:40, chanW1:200,
    damType:'бетонная арочная с пробкой, 73,3 м'},
   {id:'bak', name:'Баксанская ГЭС', river:'Баксан', lat:43.6056, lon:43.3056, flowDir:76,
    capacityMW:27, head:88.53, nmu:647.2, umo:645, areaNMU:0.072, totalVolume:0.00016, usefulVolume:0.00015,
-   eff:.93, year:1936, terrainAmpl:900, reservoirName:'Баксанский БСР',
+   eff:.93, year:1936, terrainAmpl:900, reservoirName:'Деривационный канал Баксанской ГЭС',
+   damH:6, breachW:55, chanW0:40, chanW1:180,
    damType:'бетонная водосливная, ≈6 м'}
 ];
 
@@ -35,24 +40,57 @@ const WAVE_SCALE = 1.0;
 /* ============================================================
    КАРТА
    ============================================================ */
-const map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([43.15, 44.95], 8);
+let map = null;
+let layerRes = null, layerFloodZone = null, layerFlood = null, layerMarkers = null;
 
-const baseLayers = {
-  '🌍 OpenStreetMap': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    { maxZoom:18, attribution:'© OpenStreetMap' }),
-  '⛰ Рельеф (OpenTopoMap)': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    { maxZoom:17, attribution:'© OpenTopoMap, SRTM' }),
-  '🛰 Спутник (Esri)': L.tileLayer(
-    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    { maxZoom:18, attribution:'© Esri, Maxar' })
-};
-baseLayers['⛰ Рельеф (OpenTopoMap)'].addTo(map);
-L.control.layers(baseLayers, null, { position:'topright' }).addTo(map);
+function initMap(){
+  /* пользовательские подложки рядом с «родными» слоями Яндекса */
+  ymaps.layer.storage.add('otm#layer', function(){
+    return new ymaps.Layer('https://a.tile.opentopomap.org/%z/%x/%y.png',
+      { projection: ymaps.projection.sphericalMercator });
+  });
+  ymaps.layer.storage.add('osmstd#layer', function(){
+    return new ymaps.Layer('https://a.tile.openstreetmap.org/%z/%x/%y.png',
+      { projection: ymaps.projection.sphericalMercator });
+  });
+  ymaps.mapType.storage.add('otm#topo', new ymaps.MapType('Рельеф', ['otm#layer']));
+  ymaps.mapType.storage.add('osmstd#map', new ymaps.MapType('OSM', ['osmstd#layer']));
 
-const layerRes     = L.layerGroup().addTo(map);
-const layerFloodZone = L.layerGroup().addTo(map); // зона затопления (под волной)
-const layerFlood   = L.layerGroup().addTo(map);
-const layerMarkers = L.layerGroup().addTo(map);
+  map = new ymaps.Map('map', {
+    center: [43.15, 44.95], zoom: 8, type: 'otm#topo',
+    controls: ['zoomControl', 'fullscreenControl']
+  }, { maxZoom: 16, minZoom: 4, suppressMapOpenBlock: true, avoidFractionalZoom: true });
+
+  map.controls.add(new ymaps.control.TypeSelector({
+    mapTypes: ['otm#topo', 'osmstd#map', 'yandex#map', 'yandex#satellite', 'yandex#hybrid']
+  }));
+
+  /* группы геообъектов (порядок добавления = z-порядок) */
+  layerRes       = new ymaps.GeoObjectCollection();
+  layerFloodZone = new ymaps.GeoObjectCollection();
+  layerFlood     = new ymaps.GeoObjectCollection();
+  layerMarkers   = new ymaps.GeoObjectCollection();
+  map.geoObjects.add(layerRes);
+  map.geoObjects.add(layerFloodZone);
+  map.geoObjects.add(layerFlood);
+  map.geoObjects.add(layerMarkers);
+}
+
+/* хелпер полигона в стиле Leaflet-вызовов: кольцо [ [lat,lon], ... ] */
+function polyAdd(collection, ring, o){
+  const p = new ymaps.Polygon([ring], {}, {
+    fillColor: o.fill || o.fillColor || '#000000',
+    fillOpacity: o.fillOpacity ?? 0.3,
+    strokeColor: o.color || '#ffffff',
+    strokeWidth: o.weight ?? 1.5,
+    strokeOpacity: o.opacity ?? 0.9,
+    strokeStyle: o.dash ? 'dash' : 'solid',
+    hasHint: false, hasBalloon: false
+  });
+  collection.add(p);
+  return p;
+}
+function clear(coll){ if (coll) coll.removeAll(); }
 
 /* ============================================================
    СОСТОЯНИЕ
@@ -134,7 +172,7 @@ async function fetchWithRetry(url, ms=10000, tries=2){
 /* ============================================================
    КЭШ
    ============================================================ */
-const CACHE_KEY = 'ges_cache_v18';
+const CACHE_KEY = 'ges_cache_v19';
 const RIVER_KEY_PREFIX = 'ges_river_v7_';
 const RES_KEY_PREFIX   = 'ges_res_v7_';
 const TTL = { history:12*3600*1000, forecast:30*60*1000, climate:7*24*3600*1000 };
@@ -658,11 +696,14 @@ function recompute(){
    МАРКЕРЫ
    ============================================================ */
 function createMarker(h){
-  const mk = L.circleMarker([h.lat, h.lon], {
-    radius: 7, color:'#ffffff', weight: 2.5,
-    fillColor:'#888', fillOpacity: 1, opacity: 1
-  }).addTo(layerMarkers);
-  mk.on('click', () => selectHPP(h.id, false));
+  const mk = new ymaps.Placemark([h.lat, h.lon], {
+    hintContent: h.name
+  }, {
+    preset: 'islands#circleIcon', iconColor: '#888888',
+    balloonMaxWidth: 340, zIndex: 3000
+  });
+  mk.events.add('click', () => selectHPP(h.id, false));
+  layerMarkers.add(mk);
   S.markers[h.id] = mk;
   return mk;
 }
@@ -692,8 +733,8 @@ async function loadPeriod(mode){
   S.results = {}; S.idx = 0; S.playing = false; S.damBreak = null; S.dates = [];
   S.cache[mode] = {}; S.sources = {}; S.loadingStation = {};
 
-  layerFlood.clearLayers();
-  layerRes.clearLayers();
+  clear(layerFlood);
+  clear(layerRes);
   S.reservoirs = {};
   $('playBtn').textContent = '▶';
 
@@ -948,6 +989,177 @@ function makeFloodFootprint(h, course){
 }
 
 /* ============================================================
+   ФИЗИЧЕСКАЯ МОДЕЛЬ ПРОРЫВА ПЛОТИНЫ (1D)
+   Уравнения мелкой воды (Сен-Венана) вдоль реального русла:
+     ∂A/∂t + ∂Q/∂x = 0
+     ∂Q/∂t + ∂(Q²/A + gA²/2B̄)/∂x = −gA·dz/∂x − g·n²·Q|Q|·A/(A·R^{4/3})
+   Канал — трапеция (B(s) по дну, откос m=1:18), шероховатость Мэннинга
+   n=0.035 (горный галечник). Профиль дна — реальный (SRTM/DEM, встроен).
+   Граничное условие на створе — водослив широкого порога с формированием
+   прорана за ~20 мин и опорожнением водохранилища (баланс объёма).
+   Схема Годунова с потоком Гуно (HLL), адаптивный шаг по Куранту;\n   сухое дно обрабатывается корректно (переход мокрое/сухое).
+   ============================================================ */
+function resampleUniform(course, ds){
+  /* единая сетка ds вдоль русла; заодно — кумулятивная дистанция исходного курса */
+  const cum = [0];
+  for (let i=1;i<course.length;i++) cum.push(cum[i-1] + haversineM(...course[i-1], ...course[i]));
+  const L = cum[cum.length-1];
+  const N = Math.max(10, Math.floor(L/ds));
+  const line = []; let j = 0;
+  for (let k=0;k<=N;k++){
+    const s = k*ds;
+    while (j < cum.length-2 && cum[j+1] < s) j++;
+    const t = cum[j+1] > cum[j] ? (s-cum[j])/(cum[j+1]-cum[j]) : 0;
+    line.push([course[j][0] + (course[j+1][0]-course[j][0])*Math.min(1,Math.max(0,t)),
+               course[j][1] + (course[j+1][1]-course[j][1])*Math.min(1,Math.max(0,t))]);
+  }
+  return { line, cum, L, N };
+}
+
+function simulateDamBreak(h, course, elev){
+  const ds = 250;
+  const { line, cum, L, N } = resampleUniform(course, ds);
+
+  /* профиль дна на единой сетке: elev привязан к исходным точкам курса */
+  const z = new Float64Array(N+1);
+  for (let k=0;k<=N;k++){
+    const s = k*ds;
+    let j = 0;
+    while (j < cum.length-2 && cum[j+1] < s) j++;
+    const t = cum[j+1] > cum[j] ? (s-cum[j])/(cum[j+1]-cum[j]) : 0;
+    const za = elev[Math.min(j, elev.length-1)], zb = elev[Math.min(j+1, elev.length-1)];
+    z[k] = za + (zb-za)*Math.min(1, Math.max(0, t));
+  }
+  /* лёгкое сглаживание профиля (DEM-шум в ущелье) */
+  for (let pass=0; pass<4; pass++){
+    for (let k=1;k<N;k++) z[k] = (z[k-1] + 2*z[k] + z[k+1]) / 4;
+  }
+
+  const g = 9.81, nM = 0.04, mSide = 6;   /* откосы стенок каньона 1:6 — только для показа ширины */
+  const wCell = new Float64Array(N+1);          // характерная ширина русла (м)
+  for (let k=0;k<=N;k++){
+    const s = k*ds / Math.max(1, L);
+    wCell[k] = (h.chanW0 || 40) + ((h.chanW1 || 160) - (h.chanW0 || 40)) * Math.pow(s, 0.7);
+  }
+
+  /* подпор у плотины */
+  const H0eff = (h.nmu - z[0] > 3) ? (h.nmu - z[0]) : (h.damH || 10);
+  let poolLvl = z[0] + H0eff;
+  let poolVol = h.totalVolume * 1e9;
+
+  const Hd = new Float64Array(N+1);              // глубина, м
+  const q  = new Float64Array(N+1);              // удельный расход, м²/с
+  const Hn = new Float64Array(N+1), qn = new Float64Array(N+1);
+  const F1 = new Float64Array(N+2), F2 = new Float64Array(N+2);
+
+  /* поток Гуно (HLL) на грани между ячейками, сухое дно корректно */
+  const fo = [0, 0];
+  const hll = (hL, zL, qL, hR, zR, qR) => {
+    const zf = Math.max(zL, zR);
+    const HL = Math.max(0, hL + zL - zf), HR = Math.max(0, hR + zR - zf);
+    if (HL < 1e-6 && HR < 1e-6){ fo[0] = 0; fo[1] = 0; return; }
+    const uL = qL / Math.max(HL, 1e-6), uR = qR / Math.max(HR, 1e-6);
+    const aL = Math.sqrt(g * Math.max(HL, 0)), aR = Math.sqrt(g * Math.max(HR, 0));
+    const sL = Math.min(uL - aL, uR - aR), sR = Math.max(uL + aL, uR + aR);
+    const FL1 = HL * uL, FL2 = HL * uL * uL + 0.5 * g * HL * HL;
+    const FR1 = HR * uR, FR2 = HR * uR * uR + 0.5 * g * HR * HR;
+    if (sL >= 0){ fo[0] = FL1; fo[1] = FL2; }
+    else if (sR <= 0){ fo[0] = FR1; fo[1] = FR2; }
+    else {
+      fo[0] = (sR*FL1 - sL*FR1 + sL*sR*(HR - HL)) / (sR - sL);
+      fo[1] = (sR*FL2 - sL*FR2 + sL*sR*(HR*uR - HL*uL)) / (sR - sL);
+    }
+  };
+
+  const frames = [];
+  const maxW = new Float64Array(N+1);
+  const T_FORM = 20*60;                          // формирование прорана, с
+  const T_MAX = 48*3600;
+  let t = 0, nextFrame = 0, stuck = 0;
+
+  while (t < T_MAX){
+    /* расход прорана: водослив широкого порога */
+    const breach = Math.min(1, t / T_FORM);
+    let Qsrc = 0;
+    if (poolVol > 0 && poolLvl > z[0]){
+      Qsrc = 1.7 * (h.breachW || 60) * breach * Math.pow(Math.max(0, poolLvl - z[0]), 1.5);
+    }
+
+    /* шаг по Куранту (только мокрые ячейки) */
+    let cmax = 0.5;
+    for (let k=0;k<=N;k++){
+      if (Hd[k] < 0.02) continue;
+      const u = q[k] / Math.max(Hd[k], 1e-6);
+      const c = Math.abs(u) + Math.sqrt(g * Hd[k]);
+      if (c > cmax) cmax = c;
+    }
+    const dt = Math.min(4, Math.max(0.02, 0.4 * ds / cmax));
+
+    /* баланс водохранилища за фактический dt */
+    if (Qsrc > 0){
+      poolVol = Math.max(0, poolVol - Qsrc * dt);
+      if (poolVol <= 0){ Qsrc = 0; poolLvl = z[0]; }
+      else poolLvl = z[0] + H0eff * (poolVol / (h.totalVolume * 1e9));
+    }
+
+    /* граничная ячейка: уровень прорана / расход */
+    Hd[0] = Math.max(0, poolLvl - z[0]) * breach;
+    q[0]  = Qsrc / Math.max(wCell[0], 5);
+
+    /* потоки на гранях (грань k — между ячейками k-1 и k) */
+    hll(Hd[0], z[0], q[0], Hd[0], z[0], q[0]); F1[0] = fo[0]; F2[0] = fo[1];
+    for (let k=1; k<=N; k++){
+      hll(Hd[k-1], z[k-1], q[k-1], Hd[k], z[k], q[k]);
+      F1[k] = fo[0]; F2[k] = fo[1];
+    }
+    hll(Hd[N], z[N], q[N], Hd[N], z[N], q[N]); F1[N+1] = fo[0]; F2[N+1] = fo[1];
+
+    for (let k=1; k<=N; k++){
+      /* МАССА: объёмное сохранение с шириной русла (B·H·dx),
+         так что 15 млн м³ вдхр реально ограничивают глубину затопления */
+      const bFaceR = 0.5*(wCell[k] + wCell[Math.min(k+1, N)]);
+      const bFaceL = 0.5*(wCell[k] + wCell[Math.max(k-1, 0)]);
+      let HH = Hd[k] - dt/(ds * wCell[k]) * (F1[k+1]*bFaceR - F1[k]*bFaceL);
+      let QQ = q[k]  - dt/ds * (F2[k+1] - F2[k]);
+      if (!isFinite(HH) || HH < 0) HH = 0;
+      if (!isFinite(QQ)) QQ = 0;
+      /* уклон дна (источник импульса); лимит |slope|<=0.08 — подавление
+         джамп-отражений на резких DEM-порогах */
+      const slp = (z[Math.min(k+1, N)] - z[Math.max(k-1, 0)]) / (2*ds);
+      QQ -= dt * g * HH * Math.max(-0.08, Math.min(0.08, slp));
+      /* трение Мэннинга, полу-неявно */
+      if (HH > 1e-5){
+        const u = QQ / HH;
+        QQ /= (1 + dt * g * nM*nM * Math.abs(u) / Math.pow(Math.max(HH, 1e-3), 4/3));
+      } else QQ = 0;
+      Hn[k] = HH; qn[k] = QQ;
+    }
+    Hn[0] = Hd[0]; qn[0] = q[0];
+    Hd.set(Hn); q.set(qn);
+    t += dt;
+
+    if (t >= nextFrame){
+      let front = 0, hmax = 0;
+      const wArr = new Float32Array(N+1);
+      for (let k=0;k<=N;k++){
+        wArr[k] = Hd[k] > 0.05 ? Math.min(wCell[k] + 2*mSide*Hd[k], Math.max(wCell[k]*3.5, 500)) : 0;
+        if (Hd[k] > 0.05){ front = k; if (Hd[k] > hmax) hmax = Hd[k]; }
+        if (wArr[k] > maxW[k]) maxW[k] = wArr[k];
+      }
+      frames.push({ t, w: wArr, front, hmax, qsrc: Qsrc, pool: poolLvl - z[0] });
+      nextFrame += 30;
+      if (front >= N-2) break;
+      if (Qsrc <= 0 && hmax < 0.05){ if (++stuck > 20) break; } else stuck = 0;
+      if (frames.length > 700) break;
+    }
+  }
+  const lastF = frames[frames.length-1] || { front: 0 };
+  return { line, ds, N, L, frames, maxW, simT: t, H0eff,
+           frontKm: lastF.front*ds/1000,
+           physInfo: `H₀=${H0eff.toFixed(0)} м, Мэннинг n=0.04` };
+}
+
+/* ============================================================
    ПРОРЫВ
    ============================================================ */
 async function startDamBreak(){
@@ -968,17 +1180,91 @@ async function startDamBreak(){
     return;
   }
 
-  layerFlood.clearLayers();
-  layerFloodZone.clearLayers();
+  clear(layerFlood);
+  clear(layerFloodZone);
 
-  /* Зона затопления: полный охват волны, бледным цветом под движущейся
-     волной — сразу видно, какие территории окажутся под водой. */
+  /* ========= ФИЗИЧЕСКИЙ РЕЖИМ: уравнения Сен-Венана по реальному профилю ======== */
+  const elev = (typeof RIVER_ELEV !== 'undefined') ? RIVER_ELEV[h.id] : null;
+  if (elev && elev.length >= 10){
+    showStatusMsg('Расчёт прорыва: Сен-Венан 1D по профилю DEM…');
+    await sleep(30);
+    const sim = simulateDamBreak(h, course, elev);
+    if (!sim.frames.length){ showStatusMsg('Модель не дала волны'); return; }
+
+    /* Зона затопления = размах затопленной ширины за весь расчёт
+       (обрезаем по реально достигнутому фронту — без «нитки» до конца курса) */
+    let maxK = sim.N;
+    while (maxK > 1 && sim.maxW[maxK] < 1) maxK--;
+    maxK = Math.max(maxK, 2);
+    const footPts = makeBandPolygon(
+      chaikinSmooth(sim.line.slice(0, maxK + 1), 1),
+      Array.from(sim.maxW.slice(0, maxK + 1)), h.lat);
+    polyAdd(layerFloodZone, footPts, {
+      color:'#ff9400', weight:1.5, opacity:0.85, dash:true,
+      fill:'#ffa726', fillOpacity:0.20
+    });
+
+    const realDur = Math.min(60, Math.max(20, sim.simT / 240));
+    const fmtT = s => {
+      const m2 = Math.floor(s/60), h2 = Math.floor(m2/60);
+      return (h2 ? h2 + 'ч ' : '') + (m2 % 60) + 'м';
+    };
+    S.damBreak = { id:h.id, progress:0, start:performance.now(), duration: realDur, course };
+    $('alertBanner').classList.add('show');
+    recompute(); render();
+    $('details').innerHTML = detailsHTML(h);
+
+    let fi = 0;
+    function step(tNow){
+      if (!S.damBreak) return;
+      const elapsed = (tNow - S.damBreak.start) / 1000;
+      const tSim = Math.min(sim.simT, elapsed * (sim.simT / realDur));
+      S.damBreak.progress = Math.min(1, tSim / sim.simT);
+      while (fi < sim.frames.length - 1 && sim.frames[fi+1].t <= tSim) fi++;
+      const fr = sim.frames[fi];
+      clear(layerFlood);
+      const upto = Math.min(sim.N, fr.front + 2);
+      if (upto > 1){
+        const lineTrim = sim.line.slice(0, upto + 1);
+        const wTrim = Array.from(fr.w.slice(0, upto + 1));
+        const pts = makeBandPolygon(chaikinSmooth(lineTrim, 1), wTrim, h.lat);
+        const depth = Math.min(1, fr.hmax / 15);
+        polyAdd(layerFlood, pts, {
+          color:'#ff3b3b', weight:1.5, opacity:0.85,
+          fill:'#ff5a5a', fillOpacity:0.26 + 0.22*depth
+        });
+        const fc = new ymaps.Circle([sim.line[upto], 260], null, {
+          fillColor:'#ff5a5a', fillOpacity:0.9,
+          strokeColor:'#ff1a1a', strokeWidth:2.5, strokeOpacity:0.95,
+          hasHint: false, hasBalloon: false, zIndex: 3100
+        });
+        layerFlood.add(fc);
+      }
+      $('alertBanner').innerHTML =
+        `💥 ПРОРЫВ · Сен-Венан 1D · t+${fmtT(fr.t)} · фронт ${(fr.front*sim.ds/1000).toFixed(1)} км` +
+        ` · глубина до ${fr.hmax.toFixed(1)} м · Q прорана ${fr.qsrc.toFixed(0)} м³/с` +
+        (fr.pool > 0.05 ? ` · вдхр −${(sim.H0eff - fr.pool).toFixed(1)} м` : ' · вдхр пусто');
+      render();
+      if (tSim < sim.simT) requestAnimationFrame(step);
+      else setTimeout(() => {
+        clear(layerFlood);
+        clear(layerFloodZone);
+        $('alertBanner').classList.remove('show');
+        S.damBreak = null;
+        $('details').innerHTML = detailsHTML(h);
+      }, 2600);
+    }
+    requestAnimationFrame(step);
+    return;
+  }
+
+  /* ======== ДЕКОРАТИВНЫЙ ФОЛБЭК (нет DEM-профиля) ======== */
   const footprint = makeFloodFootprint(h, course);
   if (footprint){
-    L.polygon(footprint.pts, {
-      color:'#ff9400', weight:1.5, opacity:0.85, dashArray:'7 5',
-      fillColor:'#ffa726', fillOpacity:0.28, interactive:false
-    }).addTo(layerFloodZone);
+    polyAdd(layerFloodZone, footprint.pts, {
+      color:'#ff9400', weight:1.5, opacity:0.85, dash:true,
+      fill:'#ffa726', fillOpacity:0.28
+    });
   }
 
   const duration = Math.max(12, params.baseDuration * 1.25);
@@ -993,27 +1279,29 @@ async function startDamBreak(){
     if (!S.damBreak) return;
     const elapsed = (t - S.damBreak.start)/1000;
     S.damBreak.progress = Math.min(1, elapsed / S.damBreak.duration);
-    layerFlood.clearLayers();
+    clear(layerFlood);
 
     const wave = makeFloodWaveFromCourse(h, course, S.damBreak.progress);
     if (wave){
       const fade = wave.decay;
-      L.polygon(wave.pts, {
+      polyAdd(layerFlood, wave.pts, {
         color:'#ff3b3b', weight:1.5, opacity:0.8*fade + 0.1,
-        fillColor:'#ff5a5a', fillOpacity:0.30*fade, interactive:false
-      }).addTo(layerFlood);
+        fill:'#ff5a5a', fillOpacity:0.30*fade
+      });
       if (wave.decay > 0.05){
-        L.circleMarker(wave.front, {
-          radius: 4 + 4*wave.decay, color:'#ff1a1a', weight:2.5, opacity:0.95*fade,
-          fillColor:'#ff5a5a', fillOpacity:0.9*fade, interactive:false
-        }).addTo(layerFlood);
+        const fc = new ymaps.Circle([wave.front, 180 + 180*wave.decay], null, {
+          fillColor:'#ff5a5a', fillOpacity:0.9*fade,
+          strokeColor:'#ff1a1a', strokeWidth:2.5, strokeOpacity:0.95*fade,
+          hasHint: false, hasBalloon: false, zIndex: 3100
+        });
+        layerFlood.add(fc);
       }
     }
     render();
     if (S.damBreak.progress < 1) requestAnimationFrame(step);
     else setTimeout(() => {
-      layerFlood.clearLayers();
-      layerFloodZone.clearLayers();
+      clear(layerFlood);
+      clear(layerFloodZone);
       $('alertBanner').classList.remove('show');
       S.damBreak = null;
       $('details').innerHTML = detailsHTML(h);
@@ -1024,8 +1312,8 @@ async function startDamBreak(){
 
 function stopDamBreak(){
   S.damBreak = null;
-  layerFlood.clearLayers();
-  layerFloodZone.clearLayers();
+  clear(layerFlood);
+  clear(layerFloodZone);
   $('alertBanner').classList.remove('show');
 }
 
@@ -1033,7 +1321,7 @@ function stopDamBreak(){
    ВОДОХРАНИЛИЩЕ (с фолбэком-эллипсом)
    ============================================================ */
 function drawReservoir(h, i, lf, overtop){
-  if (S.reservoirs[h.id]){ layerRes.removeLayer(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
+  if (S.reservoirs[h.id]){ layerRes.remove(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
   const r = S.results[h.id];
   if (!r) return;
 
@@ -1066,14 +1354,11 @@ function drawReservoir(h, i, lf, overtop){
     S.resVar[h.id] = vi;
     const gn = Array.isArray(g) ? g : (g.n || []);
     const rings = Array.isArray(g) ? g : ([g.d, g.n, g.f][vi] || gn);
-    const group = L.layerGroup();
+    const group = new ymaps.GeoObjectCollection();
     rings.forEach(ring => {
-      L.polygon(ring, {
-        color: color, weight: 1.6, opacity: 0.9,
-        fillColor: fill, fillOpacity: op, interactive: false
-      }).addTo(group);
+      polyAdd(group, ring, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
     });
-    group.addTo(layerRes);
+    layerRes.add(group);
     S.reservoirs[h.id] = group;
     return;
   }
@@ -1082,16 +1367,13 @@ function drawReservoir(h, i, lf, overtop){
   const osmPolys = S.reservoirsOSM[h.id];
 
   if (osmPolys && osmPolys.length){
-    const group = L.layerGroup();
+    const group = new ymaps.GeoObjectCollection();
     osmPolys.forEach(parts => {
       parts.forEach(pts => {
-        L.polygon(pts, {
-          color: color, weight: 1.6, opacity: 0.9,
-          fillColor: fill, fillOpacity: op, interactive: false
-        }).addTo(group);
+        polyAdd(group, pts, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
       });
     });
-    group.addTo(layerRes);
+    layerRes.add(group);
     S.reservoirs[h.id] = group;
     return;
   }
@@ -1126,10 +1408,7 @@ function drawReservoir(h, i, lf, overtop){
     pts.push([cLat + dLat, cLon + dLon]);
   }
 
-  const poly = L.polygon(pts, {
-    color: color, weight: 1.6, opacity: 0.9,
-    fillColor: fill, fillOpacity: op, interactive: false
-  }).addTo(layerRes);
+  const poly = polyAdd(layerRes, pts, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
   S.reservoirs[h.id] = poly;
 }
 
@@ -1233,7 +1512,7 @@ function render(){
     const mk = S.markers[h.id];
     if (!mk) return;
     if (!r){
-      mk.setStyle({ fillColor:'#555', color:'#ffffff', weight:2.5, opacity:0.7, fillOpacity:0.7 });
+      mk.options.set('iconColor', '#555555');
       return;
     }
     const lf = r.lf[i], lvl = r.level[i];
@@ -1242,8 +1521,8 @@ function render(){
     let col;
     if (isBroken || overtop) col = '#ff3b3b';
     else col = lf>0.75?'#3ddc84':lf>0.45?'#a8e05f':lf>0.20?'#ffb02e':lf>0.05?'#ff8a3d':'#ff6b6b';
-    mk.setStyle({ fillColor: col, color:'#ffffff', weight:2.5, opacity:1, fillOpacity:1 });
-    mk.bindPopup(popupHTML(h, r, i, col, isBroken, overtop), { maxWidth:320 });
+    mk.options.set('iconColor', col);
+    mk.properties.set('balloonContent', popupHTML(h, r, i, col, isBroken, overtop));
   });
 
   if (S.selected){
@@ -1252,13 +1531,13 @@ function render(){
     if (r){
       const isBroken = (S.scenario === 'dam_break' && S.selected === h.id);
       if (isBroken){
-        if (S.reservoirs[h.id]){ layerRes.removeLayer(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
+        if (S.reservoirs[h.id]){ layerRes.remove(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
       } else {
         drawReservoir(h, i, r.lf[i], r.level[i] > h.nmu - 0.15);
       }
     }
     Object.keys(S.reservoirs).forEach(id => {
-      if (id !== S.selected){ layerRes.removeLayer(S.reservoirs[id]); delete S.reservoirs[id]; }
+      if (id !== S.selected){ layerRes.remove(S.reservoirs[id]); delete S.reservoirs[id]; }
     });
   }
 
@@ -1297,8 +1576,8 @@ async function selectHPP(id, fromList){
   $('chartTitle').textContent = h.name;
   $('chartSub').textContent = `р. ${h.river}`;
 
-  if (fromList) map.flyTo([h.lat, h.lon], Math.max(map.getZoom(), 7), { duration:0.8 });
-  S.markers[id]?.openPopup();
+  if (fromList && map) map.setCenter([h.lat, h.lon], Math.max(map.getZoom(), 7), { duration: 700 });
+  if (S.markers[id]) S.markers[id].balloon.open();
 
   if (!S.cache[S.mode]?.[id] && !S.loadingStation[id] && apiAvailable !== false){
     S.loadingStation[id] = true;
@@ -1366,6 +1645,7 @@ function detailsHTML(h){
   ${overtop && !isBroken ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">⚠ КРИТИЧЕСКИЙ УРОВЕНЬ</div>' : ''}
   <div class="kv"><span>Река</span><span>${h.river}</span></div>
   <div class="kv"><span>Водохранилище</span><span>${h.reservoirName || '—'}</span></div>
+  ${h.resCoords ? `<div class="kv"><span>Координаты вдхр</span><span>${h.resCoords}</span></div>` : ''}
   <div class="kv"><span>Координаты плотины</span><span>${h.lat.toFixed(4)}, ${h.lon.toFixed(4)}</span></div>
   <div class="kv"><span>Течение (flowDir)</span><span>${h.flowDir}°</span></div>
   <div class="kv"><span>Установленная мощность</span><span>${h.capacityMW} МВт</span></div>
@@ -1379,6 +1659,8 @@ function detailsHTML(h){
     <div style="color:#ff6b6b;font-weight:700;margin-bottom:4px">🌊 Волна прорыва — ${wp.type}</div>
     <div>${wp.description}</div>
     <div style="color:#8ba0b6;margin-top:4px">скорость ≈ ${wp.speedMs} м/с · ширина до ${(wp.maxWidth/1000).toFixed(1)} км</div>
+    ${(typeof RIVER_ELEV !== 'undefined' && RIVER_ELEV[h.id]) ?
+      `<div style="color:#39d353;margin-top:4px">∿ расчёт: Сен-Венан 1D, профиль дна DEM, водосливная кривая прорана, n=0.035</div>` : ''}
     <div style="color:#8ba0b6;margin-top:2px;font-size:10px">${courseInfo}</div>
     <div style="color:#8ba0b6;font-size:10px">${resInfo}</div>
   </div>`;
@@ -1440,10 +1722,26 @@ function loop(t){
 /* ============================================================
    СТАРТ
    ============================================================ */
-(async function boot(){
+async function bootApp(){
   buildUI();
   try { await loadPeriod('history'); }
   catch(e){ console.error('Ошибка:', e); setStatus('<span class="err">ошибка: '+e.message+'</span>'); }
-})();
+}
+
+/* Яндекс.Карты API грузится асинхронно: ждём готовности, иначе — подсказка про ключ */
+if (typeof ymaps !== 'undefined' && ymaps.ready){
+  ymaps.ready(() => {
+    try { initMap(); }
+    catch(e){
+      console.error('initMap:', e);
+      setStatus('<span class="err">Яндекс.Карты API: ошибка (' + e.message + ') — проверьте apikey в index.html</span>');
+      return;
+    }
+    bootApp();
+  });
+} else {
+  setStatus('<span class="err">Яндекс.Карты API не загрузился. Вставьте рабочий apikey в &lt;script&gt; в index.html ' +
+            '(<a href="https://developer.tech.yandex.ru/services/" target="_blank">developer.tech.yandex.ru</a>)</span>');
+}
 
 window.addEventListener('error', e => console.error('Ошибка страницы:', e.error || e.message));
