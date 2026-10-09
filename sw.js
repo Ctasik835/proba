@@ -1,4 +1,4 @@
-const CACHE = 'ges-shell-v13';
+const CACHE = 'ges-shell-v10';
 const SHELL = [
   './',
   './index.html',
@@ -6,7 +6,6 @@ const SHELL = [
   './app.js',
   './reservoirs-data.js',
   './rivers-data.js',
-  './terrain-data.js',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
   'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'
