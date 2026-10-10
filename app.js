@@ -38,43 +38,30 @@ const CHART_THROTTLE_MS = 80;
 const WAVE_SCALE = 1.0;
 
 /* ============================================================
-   КАРТА
+   КАРТА (Leaflet)
    ============================================================ */
-let map = null;
-let layerRes = null, layerFloodZone = null, layerFlood = null, layerMarkers = null;
+/* attributionControl выключен и добавлен вручную с prefix:false —
+   убирает префикс «🇺🇦 Leaflet», но СОХРАНЯЕТ копирайты OSM/OTM/Esri. */
+const map = L.map('map', { zoomControl:true, preferCanvas:true, attributionControl:false })
+  .setView([43.15, 44.95], 8);
+L.control.attribution({ position:'bottomright', prefix: false }).addTo(map);
 
-function initMap(){
-  /* пользовательские подложки рядом с «родными» слоями Яндекса */
-  ymaps.layer.storage.add('otm#layer', function(){
-    return new ymaps.Layer('https://a.tile.opentopomap.org/%z/%x/%y.png',
-      { projection: ymaps.projection.sphericalMercator });
-  });
-  ymaps.layer.storage.add('osmstd#layer', function(){
-    return new ymaps.Layer('https://a.tile.openstreetmap.org/%z/%x/%y.png',
-      { projection: ymaps.projection.sphericalMercator });
-  });
-  ymaps.mapType.storage.add('otm#topo', new ymaps.MapType('Рельеф', ['otm#layer']));
-  ymaps.mapType.storage.add('osmstd#map', new ymaps.MapType('OSM', ['osmstd#layer']));
+const baseLayers = {
+  '🌍 OpenStreetMap': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    { maxZoom:18, attribution:'© OpenStreetMap' }),
+  '⛰ Рельеф (OpenTopoMap)': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    { maxZoom:17, attribution:'© OpenTopoMap, SRTM' }),
+  '🛰 Спутник (Esri)': L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom:18, attribution:'© Esri, Maxar' })
+};
+baseLayers['⛰ Рельеф (OpenTopoMap)'].addTo(map);
+L.control.layers(baseLayers, null, { position:'topright' }).addTo(map);
 
-  map = new ymaps.Map('map', {
-    center: [43.15, 44.95], zoom: 8, type: 'otm#topo',
-    controls: ['zoomControl', 'fullscreenControl']
-  }, { maxZoom: 16, minZoom: 4, suppressMapOpenBlock: true, avoidFractionalZoom: true });
-
-  map.controls.add(new ymaps.control.TypeSelector({
-    mapTypes: ['otm#topo', 'osmstd#map', 'yandex#map', 'yandex#satellite', 'yandex#hybrid']
-  }));
-
-  /* группы геообъектов (порядок добавления = z-порядок) */
-  layerRes       = new ymaps.GeoObjectCollection();
-  layerFloodZone = new ymaps.GeoObjectCollection();
-  layerFlood     = new ymaps.GeoObjectCollection();
-  layerMarkers   = new ymaps.GeoObjectCollection();
-  map.geoObjects.add(layerRes);
-  map.geoObjects.add(layerFloodZone);
-  map.geoObjects.add(layerFlood);
-  map.geoObjects.add(layerMarkers);
-}
+const layerRes     = L.layerGroup().addTo(map);
+const layerFloodZone = L.layerGroup().addTo(map); // зона затопления (под волной)
+const layerFlood   = L.layerGroup().addTo(map);
+const layerMarkers = L.layerGroup().addTo(map);
 
 /* хелпер полигона в стиле Leaflet-вызовов: кольцо [ [lat,lon], ... ] */
 function polyAdd(collection, ring, o){
@@ -87,30 +74,24 @@ function polyAddUnsafe(collection, ring, o){
   ring = ring.filter(p => p && isFinite(p[0]) && isFinite(p[1]));
   if (ring.length < 3) return null;
   if (ring[0][0] !== ring[ring.length-1][0] || ring[0][1] !== ring[ring.length-1][1]) ring = ring.concat([ring[0]]);
-  const p = new ymaps.Polygon([ring], {}, {
-    fillColor: o.fill || o.fillColor || '#000000',
-    fillOpacity: o.fillOpacity ?? 0.3,
-    strokeColor: o.color || '#ffffff',
-    strokeWidth: o.weight ?? 1.5,
-    strokeOpacity: o.opacity ?? 0.9,
-    strokeStyle: o.dash ? 'dash' : 'solid',
-    hasHint: false, hasBalloon: false
+  const p = L.polygon(ring, {
+    color: o.color || '#ffffff', weight: o.weight ?? 1.5, opacity: o.opacity ?? 0.9,
+    fillColor: o.fill || o.fillColor || '#000000', fillOpacity: o.fillOpacity ?? 0.3,
+    dashArray: o.dash ? '7 5' : null, interactive: false
   });
-  collection.add(p);
+  p.addTo(collection);
   return p;
 }
-function clear(coll){ if (coll) coll.removeAll(); }
+function clear(coll){ if (coll) coll.clearLayers(); }
 
-/* Панорама так, чтобы станция оказалась НЕ под панелями (сдвиг центра вручную
-   через глобальные пиксели проекции — опция position у setCenter в API 2.1 не работает). */
+/* Панорама так, чтобы станция оказалась НЕ под панелями: точка ставится
+   на 62% ширины экрана (левее chart-панели, правее сайдбара). */
 function panToStation(h, zoom){
   const z = Math.max(map.getZoom(), zoom || 7);
-  const proj = map.options.get('projection');
-  const sz = map.container.getSize();
-  const gp = proj.toGlobalPixels([h.lat, h.lon], z);
-  const cx = gp[0] + (0.5 - 0.62) * sz[0];          // станция на 62% ширины (левее chart-панели, правее сайдбара)
-  const center = proj.fromGlobalPixels([cx, gp[1]], z);
-  map.setCenter(center, z, { duration: 700 });
+  const pt = map.project([h.lat, h.lon], z);
+  const sz = map.getSize();
+  const center = map.unproject(pt.subtract([(0.62 - 0.5) * sz.x, 0]), z);
+  map.flyTo(center, z, { duration: 0.7 });
 }
 
 /* Минимальная ЭКРАННАЯ ширина волны/зоны: на обзорном масштабе (z≈8-10,
@@ -725,14 +706,12 @@ function recompute(){
    МАРКЕРЫ
    ============================================================ */
 function createMarker(h){
-  const mk = new ymaps.Placemark([h.lat, h.lon], {
-    hintContent: h.name
-  }, {
-    preset: 'islands#circleIcon', iconColor: '#888888',
-    balloonMaxWidth: 340, zIndex: 3000
-  });
-  mk.events.add('click', () => selectHPP(h.id, false));
-  layerMarkers.add(mk);
+  const mk = L.circleMarker([h.lat, h.lon], {
+    radius: 8, color:'#ffffff', weight: 2.5,
+    fillColor:'#888', fillOpacity: 1, opacity: 1
+  }).addTo(layerMarkers);
+  mk.on('click', () => selectHPP(h.id, false));
+  mk.bindTooltip(h.name, { direction:'top', offset:[0,-8] });
   S.markers[h.id] = mk;
   return mk;
 }
@@ -1230,13 +1209,11 @@ async function startDamBreak(){
       Array.from(visWidths(sim.maxW.slice(0, maxK + 1), 500)), h.lat);
 
     /* перенос и зум на зону прорыва, чтобы волну было видно */
-    if (map){
-      const seg = sim.line.slice(0, maxK + 1);
-      const la = seg.map(p => p[0]), lo = seg.map(p => p[1]);
-      map.setBounds(
-        [[Math.min(...la), Math.min(...lo)], [Math.max(...la), Math.max(...lo)]],
-        { duration: 700, zoomMargin: [90, 440, 120, 360] });
-    }
+    const seg = sim.line.slice(0, maxK + 1);
+    const la = seg.map(p => p[0]), lo = seg.map(p => p[1]);
+    map.flyToBounds(
+      [[Math.min(...la), Math.min(...lo)], [Math.max(...la), Math.max(...lo)]],
+      { paddingTopLeft: [370, 90], paddingBottomRight: [450, 120], duration: 0.7 });
     polyAdd(layerFloodZone, footPts, {
       color:'#ff9400', weight:1.5, opacity:0.85, dash:true,
       fill:'#ffa726', fillOpacity:0.20
@@ -1251,9 +1228,8 @@ async function startDamBreak(){
     $('alertBanner').classList.add('show');
     recompute(); render();
     $('details').innerHTML = detailsHTML(h);
-    /* балун «💥 ПЛОТИНА РАЗРУШЕНА» — строго ПОСЛЕ анимации зума карты
-       (Яндекс закрывает балуны на ходу setBounds/setCenter) */
-    setTimeout(() => { const m = S.markers[h.id]; if (m) m.balloon.open(); }, 850);
+    /* попап «💥 ПЛОТИНА РАЗРУШЕНА» у плотины — после начала анимации */
+    setTimeout(() => { const m = S.markers[h.id]; if (m) m.openPopup(); }, 500);
 
     let fi = 0;
     function step(tNow){
@@ -1275,12 +1251,10 @@ async function startDamBreak(){
           fill:'#ff5a5a', fillOpacity:0.26 + 0.22*depth
         });
         try {
-          const fc = new ymaps.Circle([sim.line[upto], 260], null, {
-            fillColor:'#ff5a5a', fillOpacity:0.9,
-            strokeColor:'#ff1a1a', strokeWidth:2.5, strokeOpacity:0.95,
-            hasHint: false, hasBalloon: false, zIndex: 3100
-          });
-          layerFlood.add(fc);
+          L.circleMarker(sim.line[upto], {
+            radius: 6, color:'#ff1a1a', weight:2.5, opacity:0.95,
+            fillColor:'#ff5a5a', fillOpacity:0.9, interactive:false
+          }).addTo(layerFlood);
         } catch(e){ console.warn('front circle:', e.message); }
       }
       $('alertBanner').innerHTML =
@@ -1310,7 +1284,7 @@ async function startDamBreak(){
     });
   }
 
-  setTimeout(() => { const m = S.markers[h.id]; if (m) m.balloon.open(); }, 400);
+  setTimeout(() => { const m = S.markers[h.id]; if (m) m.openPopup(); }, 400);
   const duration = Math.max(12, params.baseDuration * 1.25);
   S.damBreak = { id:h.id, progress:0, start:performance.now(), duration, course };
   $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${(courseLength(course)/1000).toFixed(0)} км вниз по течению`;
@@ -1333,12 +1307,12 @@ async function startDamBreak(){
         fill:'#ff5a5a', fillOpacity:0.30*fade
       });
       if (wave.decay > 0.05){
-        const fc = new ymaps.Circle([wave.front, 180 + 180*wave.decay], null, {
-          fillColor:'#ff5a5a', fillOpacity:0.9*fade,
-          strokeColor:'#ff1a1a', strokeWidth:2.5, strokeOpacity:0.95*fade,
-          hasHint: false, hasBalloon: false, zIndex: 3100
-        });
-        layerFlood.add(fc);
+        try {
+          L.circleMarker(wave.front, {
+            radius: 4 + 4*wave.decay, color:'#ff1a1a', weight:2.5, opacity:0.95*fade,
+            fillColor:'#ff5a5a', fillOpacity:0.9*fade, interactive:false
+          }).addTo(layerFlood);
+        } catch(e){ console.warn('front:', e.message); }
       }
     }
     render();
@@ -1365,7 +1339,7 @@ function stopDamBreak(){
    ВОДОХРАНИЛИЩЕ (с фолбэком-эллипсом)
    ============================================================ */
 function drawReservoir(h, i, lf, overtop){
-  if (S.reservoirs[h.id]){ layerRes.remove(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
+  if (S.reservoirs[h.id]){ layerRes.removeLayer(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
   const r = S.results[h.id];
   if (!r) return;
 
@@ -1398,11 +1372,11 @@ function drawReservoir(h, i, lf, overtop){
     S.resVar[h.id] = vi;
     const gn = Array.isArray(g) ? g : (g.n || []);
     const rings = Array.isArray(g) ? g : ([g.d, g.n, g.f][vi] || gn);
-    const group = new ymaps.GeoObjectCollection();
+    const group = L.layerGroup();
     rings.forEach(ring => {
       polyAdd(group, ring, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
     });
-    layerRes.add(group);
+    group.addTo(layerRes);
     S.reservoirs[h.id] = group;
     return;
   }
@@ -1411,13 +1385,13 @@ function drawReservoir(h, i, lf, overtop){
   const osmPolys = S.reservoirsOSM[h.id];
 
   if (osmPolys && osmPolys.length){
-    const group = new ymaps.GeoObjectCollection();
+    const group = L.layerGroup();
     osmPolys.forEach(parts => {
       parts.forEach(pts => {
         polyAdd(group, pts, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
       });
     });
-    layerRes.add(group);
+    group.addTo(layerRes);
     S.reservoirs[h.id] = group;
     return;
   }
@@ -1556,7 +1530,7 @@ function render(){
     const mk = S.markers[h.id];
     if (!mk) return;
     if (!r){
-      mk.options.set('iconColor', '#555555');
+      mk.setStyle({ fillColor:'#555', color:'#ffffff', weight:2.5, opacity:0.7, fillOpacity:0.7 });
       return;
     }
     const lf = r.lf[i], lvl = r.level[i];
@@ -1565,8 +1539,8 @@ function render(){
     let col;
     if (isBroken || overtop) col = '#ff3b3b';
     else col = lf>0.75?'#3ddc84':lf>0.45?'#a8e05f':lf>0.20?'#ffb02e':lf>0.05?'#ff8a3d':'#ff6b6b';
-    mk.options.set('iconColor', col);
-    mk.properties.set('balloonContent', popupHTML(h, r, i, col, isBroken, overtop));
+    mk.setStyle({ fillColor: col, color:'#ffffff', weight:2.5, opacity:1, fillOpacity:1 });
+    mk.bindPopup(popupHTML(h, r, i, col, isBroken, overtop), { maxWidth: 330 });
   });
 
   if (S.selected){
@@ -1575,13 +1549,13 @@ function render(){
     if (r){
       const isBroken = (S.scenario === 'dam_break' && S.selected === h.id);
       if (isBroken){
-        if (S.reservoirs[h.id]){ layerRes.remove(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
+        if (S.reservoirs[h.id]){ layerRes.removeLayer(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
       } else {
         drawReservoir(h, i, r.lf[i], r.level[i] > h.nmu - 0.15);
       }
     }
     Object.keys(S.reservoirs).forEach(id => {
-      if (id !== S.selected){ layerRes.remove(S.reservoirs[id]); delete S.reservoirs[id]; }
+      if (id !== S.selected){ layerRes.removeLayer(S.reservoirs[id]); delete S.reservoirs[id]; }
     });
   }
 
@@ -1622,8 +1596,8 @@ async function selectHPP(id, fromList){
 
   if (map){
     if (fromList) panToStation(h);
-    /* балун открываем после завершения панорамы, чтобы он не улетал за панели */
-    setTimeout(() => { const m = S.markers[id]; if (m) m.balloon.open(); }, fromList ? 850 : 0);
+    /* попап — после панорамы (Leaflet попапы зум не закрывает, так рисуется чище) */
+    setTimeout(() => { const m = S.markers[id]; if (m) m.openPopup(); }, fromList ? 800 : 0);
   }
 
   if (!S.cache[S.mode]?.[id] && !S.loadingStation[id] && apiAvailable !== false){
@@ -1769,26 +1743,10 @@ function loop(t){
 /* ============================================================
    СТАРТ
    ============================================================ */
-async function bootApp(){
+(async function boot(){
   buildUI();
   try { await loadPeriod('history'); }
   catch(e){ console.error('Ошибка:', e); setStatus('<span class="err">ошибка: '+e.message+'</span>'); }
-}
-
-/* Яндекс.Карты API грузится асинхронно: ждём готовности, иначе — подсказка про ключ */
-if (typeof ymaps !== 'undefined' && ymaps.ready){
-  ymaps.ready(() => {
-    try { initMap(); }
-    catch(e){
-      console.error('initMap:', e);
-      setStatus('<span class="err">Яндекс.Карты API: ошибка (' + e.message + ') — проверьте apikey в index.html</span>');
-      return;
-    }
-    bootApp();
-  });
-} else {
-  setStatus('<span class="err">Яндекс.Карты API не загрузился. Вставьте рабочий apikey в &lt;script&gt; в index.html ' +
-            '(<a href="https://developer.tech.yandex.ru/services/" target="_blank">developer.tech.yandex.ru</a>)</span>');
-}
+})();
 
 window.addEventListener('error', e => console.error('Ошибка страницы:', e.error || e.message));
