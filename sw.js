@@ -1,4 +1,4 @@
-const CACHE = 'ges-shell-v15';
+const CACHE = 'ges-shell-v16';
 const SHELL = [
   './',
   './index.html',
@@ -7,7 +7,9 @@ const SHELL = [
   './reservoirs-data.js',
   './rivers-data.js',
   './terrain-data.js',
-  'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'
+  'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js',
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
 ];
 
 self.addEventListener('install', e => {
