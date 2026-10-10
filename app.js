@@ -1251,7 +1251,9 @@ async function startDamBreak(){
     $('alertBanner').classList.add('show');
     recompute(); render();
     $('details').innerHTML = detailsHTML(h);
-    if (S.markers[h.id]) S.markers[h.id].balloon.open();
+    /* балун «💥 ПЛОТИНА РАЗРУШЕНА» — строго ПОСЛЕ анимации зума карты
+       (Яндекс закрывает балуны на ходу setBounds/setCenter) */
+    setTimeout(() => { const m = S.markers[h.id]; if (m) m.balloon.open(); }, 850);
 
     let fi = 0;
     function step(tNow){
@@ -1308,7 +1310,7 @@ async function startDamBreak(){
     });
   }
 
-  if (S.markers[h.id]) S.markers[h.id].balloon.open();
+  setTimeout(() => { const m = S.markers[h.id]; if (m) m.balloon.open(); }, 400);
   const duration = Math.max(12, params.baseDuration * 1.25);
   S.damBreak = { id:h.id, progress:0, start:performance.now(), duration, course };
   $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${(courseLength(course)/1000).toFixed(0)} км вниз по течению`;
@@ -1621,7 +1623,7 @@ async function selectHPP(id, fromList){
   if (map){
     if (fromList) panToStation(h);
     /* балун открываем после завершения панорамы, чтобы он не улетал за панели */
-    setTimeout(() => { const m = S.markers[id]; if (m) m.balloon.open(); }, fromList ? 750 : 0);
+    setTimeout(() => { const m = S.markers[id]; if (m) m.balloon.open(); }, fromList ? 850 : 0);
   }
 
   if (!S.cache[S.mode]?.[id] && !S.loadingStation[id] && apiAvailable !== false){
