@@ -111,12 +111,12 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
   font-size:13px;cursor:pointer;vertical-align:middle}
 #refreshBtn:hover{background:rgba(49,201,255,.25)}
 
-.leaflet-popup-content-wrapper{background:var(--panel2);color:var(--txt);
-  border:1px solid var(--line);border-radius:10px;backdrop-filter:blur(10px)}
-.leaflet-popup-tip{background:var(--panel2)}
-.leaflet-popup-content{margin:12px 14px;font-size:12px;line-height:1.55}
-.leaflet-popup-content h4{margin:0 0 7px;font-size:13px;color:var(--acc)}
-.leaflet-container a.leaflet-popup-close-button{color:var(--dim)}
+/* балун Яндекс.Карт в стиле панели */
+ymaps [class*="balloon__content"]{background:var(--panel2)!important;color:var(--txt);
+  font-size:12px;line-height:1.55}
+ymaps [class*="balloon__content"] h4{margin:0 0 7px;font-size:13px;color:var(--acc)}
+ymaps [class*="balloon"]{border-radius:10px;overflow:hidden}
+ymaps [class*="balloon__close"]+.ymaps_balloon__content{margin-right:18px}
 
 @media(max-width:1100px){
   #chartPanel{display:none!important}
