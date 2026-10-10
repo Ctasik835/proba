@@ -101,6 +101,26 @@ function polyAddUnsafe(collection, ring, o){
 }
 function clear(coll){ if (coll) coll.removeAll(); }
 
+/* Панорама так, чтобы станция оказалась НЕ под панелями (сдвиг центра вручную
+   через глобальные пиксели проекции — опция position у setCenter в API 2.1 не работает). */
+function panToStation(h, zoom){
+  const z = Math.max(map.getZoom(), zoom || 7);
+  const proj = map.options.get('projection');
+  const sz = map.container.getSize();
+  const gp = proj.toGlobalPixels([h.lat, h.lon], z);
+  const cx = gp[0] + (0.5 - 0.62) * sz[0];          // станция на 62% ширины (левее chart-панели, правее сайдбара)
+  const center = proj.fromGlobalPixels([cx, gp[1]], z);
+  map.setCenter(center, z, { duration: 700 });
+}
+
+/* Минимальная ЭКРАННАЯ ширина волны/зоны: на обзорном масштабе (z≈8-10,
+   ~450 м/пикс) реальная лента 100-500 м тоньше пикселя и невидима. */
+function visWidths(w, floor){
+  const out = new Float32Array(w.length);
+  for (let k = 0; k < w.length; k++) out[k] = w[k] > 1 ? Math.max(w[k], floor) : 0;
+  return out;
+}
+
 /* ============================================================
    СОСТОЯНИЕ
    ============================================================ */
@@ -1207,7 +1227,16 @@ async function startDamBreak(){
     maxK = Math.max(maxK, 2);
     const footPts = makeBandPolygon(
       chaikinSmooth(sim.line.slice(0, maxK + 1), 1),
-      Array.from(sim.maxW.slice(0, maxK + 1)), h.lat);
+      Array.from(visWidths(sim.maxW.slice(0, maxK + 1), 500)), h.lat);
+
+    /* перенос и зум на зону прорыва, чтобы волну было видно */
+    if (map){
+      const seg = sim.line.slice(0, maxK + 1);
+      const la = seg.map(p => p[0]), lo = seg.map(p => p[1]);
+      map.setBounds(
+        [[Math.min(...la), Math.min(...lo)], [Math.max(...la), Math.max(...lo)]],
+        { duration: 700, zoomMargin: [90, 440, 120, 360] });
+    }
     polyAdd(layerFloodZone, footPts, {
       color:'#ff9400', weight:1.5, opacity:0.85, dash:true,
       fill:'#ffa726', fillOpacity:0.20
@@ -1236,7 +1265,7 @@ async function startDamBreak(){
       const upto = Math.min(sim.N, fr.front + 2);
       if (upto > 1){
         const lineTrim = sim.line.slice(0, upto + 1);
-        const wTrim = Array.from(fr.w.slice(0, upto + 1));
+        const wTrim = Array.from(visWidths(fr.w.slice(0, upto + 1), 500));
         const pts = makeBandPolygon(chaikinSmooth(lineTrim, 1), wTrim, h.lat);
         const depth = Math.min(1, fr.hmax / 15);
         polyAdd(layerFlood, pts, {
@@ -1590,9 +1619,7 @@ async function selectHPP(id, fromList){
   $('chartSub').textContent = `р. ${h.river}`;
 
   if (map){
-    /* станцию ставим в «чистую» область экрана (правее и выше панелей), а не в центр */
-    const pos = [Math.round(window.innerWidth * 0.64), Math.round(window.innerHeight * 0.52)];
-    if (fromList) map.setCenter([h.lat, h.lon], Math.max(map.getZoom(), 7), { duration: 700, position: pos });
+    if (fromList) panToStation(h);
     /* балун открываем после завершения панорамы, чтобы он не улетал за панели */
     setTimeout(() => { const m = S.markers[id]; if (m) m.balloon.open(); }, fromList ? 750 : 0);
   }
