@@ -4,6 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Интерактивная карта ГЭС</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -64,8 +65,7 @@
 </section>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<!-- Яндекс.Карты API 2.1 -->
-<script src="https://api-maps.yandex.ru/2.1/?lang=ru_RU&amp;apikey=7c5b35ae-03a4-46b8-af39-cde3a858cfb4"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 if ('serviceWorker' in navigator){
   window.addEventListener('load', () => {
@@ -73,7 +73,7 @@ if ('serviceWorker' in navigator){
   });
 }
 </script>
-<div id="buildStamp">сборка <b>v15 · фикс балуна</b></div>
+<div id="buildStamp">сборка <b>v16 · leaflet</b></div>
 <script src="rivers-data.js"></script>
 <script src="reservoirs-data.js"></script>
 <script src="terrain-data.js"></script>
