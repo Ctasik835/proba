@@ -31,6 +31,22 @@ const CHART_WINDOW = 60;
 const CHART_THROTTLE_MS = 80;
 
 /* ============================================================
+   КЛИМАТ (CMIP6 через Open-Meteo Climate API)
+   Ансамбль из трёх CMIP6-моделей, доступных эндпоинту:
+   EC-Earth3P-HR, CMCC-CM2-VHR4, MRI-AGCM3-2-S.
+   Горизонт 2025–2060: климатический тренд виден уже на ~35 годах,
+   при этом прогноз остаётся детерминированным по фазе внутренней
+   изменчивости (weather-подобный ряд той же модели).
+   ============================================================ */
+const CMIP6_MODELS = ['EC_Earth3P_HR', 'CMCC_CM2_VHR4', 'MRI_AGCM3_2_S'];
+const SSP_LABELS = { ssp126:'SSP1-2.6', ssp370:'SSP3-7.0', ssp585:'SSP5-8.5' };
+const CLIMATE_START = '2025-01-01';
+const CLIMATE_END   = '2060-12-31';
+/* исторический базовый период ERA5 для bias-коррекции ансамбля */
+const REF_START = '1991-01-01';
+const REF_END   = '2020-12-31';
+
+/* ============================================================
    НАСТРОЙКИ ВОЛНЫ
    WAVE_SCALE = 1.0 — общий масштаб волны (1.0 = полный размер,
    ширины рассчитаны под реальные поймы рек).
@@ -106,7 +122,7 @@ function visWidths(w, floor){
    СОСТОЯНИЕ
    ============================================================ */
 const S = {
-  mode:'history', scenario:'normal',
+  mode:'history', scenario:'normal', ssp:'ssp585',
   dates:[], results:{}, cache:{}, sources:{},
   markers:{}, reservoirs:{},
   idx:0, playing:false, selected:null, chart:null,
@@ -117,6 +133,7 @@ const S = {
 
 let animAcc = 0, animLast = 0;
 let apiAvailable = null;
+let climateApiAvailable = null;
 
 /* ============================================================
    УТИЛИТЫ
@@ -182,7 +199,7 @@ async function fetchWithRetry(url, ms=10000, tries=2){
 /* ============================================================
    КЭШ
    ============================================================ */
-const CACHE_KEY = 'ges_cache_v19';
+const CACHE_KEY = 'ges_cache_v20';
 const RIVER_KEY_PREFIX = 'ges_river_v7_';
 const RES_KEY_PREFIX   = 'ges_res_v7_';
 const TTL = { history:12*3600*1000, forecast:30*60*1000, climate:7*24*3600*1000 };
@@ -198,14 +215,18 @@ function writeCacheAll(o){
     } catch(_){}
   }
 }
+/* Ключ кэша: для климата — с учётом выбранного SSP-сценария,
+   иначе переключение сценариев отдавало бы данные из чужого кэша. */
+function cacheKey(mode){ return mode === 'climate' ? `climate_${S.ssp}` : mode; }
+
 function getCached(mode,id){
-  const a=readCacheAll(); const e=a[mode]?.[id];
+  const a=readCacheAll(); const e=a[cacheKey(mode)]?.[id];
   if(!e) return null;
   if(Date.now()-e.ts > TTL[mode]) return null;
   return e.data;
 }
 function getStaleCached(mode,id){
-  const a=readCacheAll(); const e=a[mode]?.[id];
+  const a=readCacheAll(); const e=a[cacheKey(mode)]?.[id];
   return e ? e.data : null;
 }
 function compressData(data){
@@ -217,8 +238,8 @@ function compressData(data){
   };
 }
 function setCached(mode,id,data){
-  const a=readCacheAll(); if(!a[mode]) a[mode]={};
-  a[mode][id]={ ts:Date.now(), data: compressData(data) };
+  const a=readCacheAll(); const key=cacheKey(mode); if(!a[key]) a[key]={};
+  a[key][id]={ ts:Date.now(), data: compressData(data) };
   writeCacheAll(a);
 }
 
@@ -233,7 +254,10 @@ async function pingAPI(){
   const probes = [
     'https://api.open-meteo.com/v1/forecast?latitude=55&longitude=37&daily=temperature_2m_mean&forecast_days=1',
     'https://archive-api.open-meteo.com/v1/archive?latitude=55&longitude=37&start_date=2024-01-01&end_date=2024-01-03&daily=temperature_2m_mean',
-    'https://flood-api.open-meteo.com/v1/flood?latitude=55&longitude=37&daily=river_discharge&forecast_days=1'
+    'https://flood-api.open-meteo.com/v1/flood?latitude=55&longitude=37&daily=river_discharge&forecast_days=1',
+    /* climate-хост проверяем отдельно: без него режим «Климат» молча
+       уходил в синтетику, даже когда остальные API были доступны */
+    'https://climate-api.open-meteo.com/v1/climate?latitude=55&longitude=37&start_date=2025-01-01&end_date=2025-01-03&daily=temperature_2m_mean'
   ].map(u => fetchWithTimeout(u, 8000));
   try {
     await Promise.any(probes);
@@ -242,6 +266,13 @@ async function pingAPI(){
     apiAvailable = false;
     lastApiError = (e && e.errors && e.errors[0] && e.errors[0].message) || '';
     console.warn('Open-Meteo недоступен:', lastApiError || e);
+  }
+  /* отдельный флаг доступности климатического эндпоинта */
+  try {
+    await fetchWithTimeout(probes[3], 8000);
+    climateApiAvailable = true;
+  } catch(e){
+    climateApiAvailable = false;
   }
   ensureOfflineRetry();
 }
@@ -547,11 +578,162 @@ out geom;`;
 /* ============================================================
    СИНТЕТИКА И OPEN-METEO
    ============================================================ */
+/* ============================================================
+   КЛИМАТ: CMIP6-АНСАМБЛЬ + BIAS-КОРРЕКЦИЯ + СНЕГО-Ледовая модель
+   ============================================================ */
+
+/* Среднесуточная температура, при которой осадки выпадают дождём.
+   Линейный переход за ±1.5 °C — стандартное упрощение degree-day-подходов. */
+function rainFraction(T){
+  if (T <= -1.5) return 0;
+  if (T >=  1.5) return 1;
+  return (T + 1.5) / 3;
+}
+
+/* Извлекает из ответа Climate API ряды по всем моделям ансамбля и
+   считает ансамблевую среднюю (mean-of-models). Пропуски не обнуляются —
+   усредняем только валидные значения дня. */
+function parseClimateEnsemble(json, variable){ // variable: 'temperature_2m_mean' | 'precipitation_sum'
+  const daily = json.daily || {};
+  const time = daily.time || [];
+  const series = CMIP6_MODELS
+    .map(m => daily[`${variable}_${m}`])
+    .filter(s => Array.isArray(s));
+  if (!series.length){
+    const single = daily[variable];
+    if (Array.isArray(single)) series.push(single);
+  }
+  if (!series.length) throw new Error(`Climate API: нет данных ${variable}`);
+  const mean = new Array(time.length);
+  for (let i = 0; i < time.length; i++){
+    let s = 0, c = 0;
+    for (const arr of series){ const v = arr[i]; if (v != null && isFinite(v)){ s += v; c++; } }
+    mean[i] = c ? s / c : null;
+  }
+  return { time, mean, nModels: series.length };
+}
+
+/* Bias-коррекция ансамбля по историческому базовому периоду ERA5
+   (1991–2020): температура — аддитивная поправка, осадки —
+   мультипликативный масштаб (не ниже 0.3, чтобы не «схлопнуть» сигнал). */
+async function fetchClimateBias(h){
+  const [refRaw, ensHist] = await Promise.all([
+    fetchWithRetry(
+      `https://archive-api.open-meteo.com/v1/archive?latitude=${h.lat}&longitude=${h.lon}` +
+      `&start_date=${REF_START}&end_date=${REF_END}` +
+      `&daily=temperature_2m_mean,precipitation_sum&timezone=UTC`, 30000),
+    fetchWithRetry(
+      `https://climate-api.open-meteo.com/v1/climate?latitude=${h.lat}&longitude=${h.lon}` +
+      `&start_date=${REF_START}&end_date=${REF_END}` +
+      `&models=${CMIP6_MODELS.join(',')}&daily=temperature_2m_mean,precipitation_sum` +
+      `&scenario=historical`, 45000)
+  ]);
+  const rt = refRaw.daily.temperature_2m_mean, rp = refRaw.daily.precipitation_sum;
+  const et = parseClimateEnsemble(ensHist, 'temperature_2m_mean').mean;
+  const ep = parseClimateEnsemble(ensHist, 'precipitation_sum').mean;
+
+  let sumT = 0, cntT = 0, sumP = 0, cntP = 0;
+  for (let i = 0; i < rt.length; i++){
+    if (rt[i] != null && et[i] != null){ sumT += rt[i] - et[i]; cntT++; }
+    if (rp[i] != null && ep[i] != null){ sumP += rp[i]; cntP += ep[i]; }
+  }
+  const dT  = cntT ? sumT / cntT : 0;
+  let   rP  = (cntP > 0 && sumP > 0) ? sumP / cntP : 1;
+  rP = Math.min(3, Math.max(0.3, rP));
+  return { dT, rP };
+}
+
+/* Полная климатическая загрузка станции: ансамбль CMIP6 по выбранному SSP,
+   bias-коррекция по ERA5, детерминированный сток через снежной/ледовой баланс.
+   Возвращает { hydro, clim, meta }. */
+async function fetchClimateData(h){
+  if (climateApiAvailable === false) throw new Error('climate-api недоступен');
+  const url =
+    `https://climate-api.open-meteo.com/v1/climate?latitude=${h.lat}&longitude=${h.lon}` +
+    `&start_date=${CLIMATE_START}&end_date=${CLIMATE_END}` +
+    `&models=${CMIP6_MODELS.join(',')}` +
+    `&daily=temperature_2m_mean,precipitation_sum&scenario=${S.ssp}`;
+  const [raw, bias] = await Promise.all([
+    fetchWithRetry(url, 60000),
+    fetchClimateBias(h).catch(e => {
+      console.warn('bias-коррекция недоступна, берётся сырой ансамбль:', e.message);
+      return { dT: 0, rP: 1 };
+    })
+  ]);
+  if (raw.error) throw new Error(raw.reason || 'ошибка Climate API');
+
+  const T0 = parseClimateEnsemble(raw, 'temperature_2m_mean');
+  const P0 = parseClimateEnsemble(raw, 'precipitation_sum');
+  const n = T0.time.length;
+  const t = new Array(n), p = new Array(n);
+  for (let i = 0; i < n; i++){
+    t[i] = T0.mean[i] == null ? null : +(T0.mean[i] + bias.dT).toFixed(2);
+    p[i] = P0.mean[i] == null ? null : +Math.max(0, P0.mean[i] * bias.rP).toFixed(2);
+  }
+  const q = climateRunoff(h, t, p);
+  return {
+    hydro: { time: T0.time, q },
+    clim:  { time: T0.time, t, p },
+    meta:  { models: Math.min(T0.nModels, P0.nModels), ssp: S.ssp, dT: bias.dT, rP: bias.rP }
+  };
+}
+
+/* Детерминированный сток из климатических рядов: узел водосбора
+   (осадки → сток) + сезонный снежный запас с таянием по градусо-дням.
+   Именно этого не хватало старой формуле Q(P): она превращала зимние
+   осадки в летний паводок и игнорировала ледниковое/снеговое питание. */
+function climateRunoff(h, temps, precs){
+  const n = temps.length;
+  const QmaxT = h.capacityMW * 1e6 / (1000 * 9.81 * h.head * h.eff);
+  const Qmean = 0.4 * QmaxT;
+
+  /* среднегодовая температура ряда (для калибровки коэффициента стока) */
+  let tSum = 0, tCnt = 0;
+  for (const v of temps) if (v != null && isFinite(v)){ tSum += v; tCnt++; }
+  const Tavg = tCnt ? tSum / tCnt : 6;
+
+  /* Коэффициент стока: холодные горные водосборы — выше (меньше ET, ледник),
+     тёплые — ниже. Границы как у режимов Кавказа (~0.45–0.75). */
+  const alpha = Math.min(0.75, Math.max(0.45, 0.72 - 0.03 * Tavg));
+
+  /* Площадь водосбора из гидротехнических параметров ГЭС: привязка к
+     проектному среднему расходу — Qmean = α·A·R/год, где климатический
+     слой стока R = 700 мм/год. Отсюда A[км²] = Qmean[м³/с]·31.536e6 / (α·R[м]). */
+  const catchmentKm2 = Math.max(20, Qmean * 31.536e6 / (alpha * 0.7));
+
+  const SWE_CAP = 600;                              // предельный ЗСЗ, мм в/э
+  const DDF = 3.2;                                  // мм в/э на °C·сут (морена/снежник)
+  const meltCoef = 0.85;                            // доля растаявшего — в сток сразу
+                                                    // остальное — в подземный сток (лаг 60 дней)
+
+  let swe = 0;
+  const lagBuf = new Array(60).fill(0);   // круговой буфер подземного стока (лаг 60 дней)
+  const q = new Array(n);
+  for (let i = 0; i < n; i++){
+    const T = temps[i] ?? 0;
+    const P = precs[i] ?? 0;
+    const rf = rainFraction(T);
+    const rain = P * rf, snow = P * (1 - rf);
+    swe = Math.min(SWE_CAP, swe + snow);
+    /* таяние: градусо-дни над нулём × ДДФ, но не больше запаса */
+    const melt = Math.min(swe, Math.max(0, T) * DDF);
+    swe -= melt;
+    /* прямое дождевое/талое питание + медленная составляющая с лагом */
+    const mmToQ = catchmentKm2 * 1e6 / 86400 / 1000;   // мм/сут → м³/с
+    const surface = (rain + melt * meltCoef) * alpha * mmToQ;
+    const infil = melt * (1 - meltCoef) * alpha * mmToQ;
+    const baseflowLag = lagBuf[i % 60];                // значение ровно 60 дней назад
+    lagBuf[i % 60] = infil;                            // записываем текущее на будущее
+    q[i] = Math.max(1, Math.round(surface + baseflowLag));
+  }
+  return q;
+}
+
 function syntheticData(h, mode){
   let start, end;
   if (mode === 'history'){ start=new Date(HISTORY_START); end=new Date(Date.now()-8*864e5); }
   else if (mode === 'forecast'){ start=new Date(Date.now()-30*864e5); end=new Date(Date.now()+16*864e5); }
-  else { start=new Date('2025-01-01'); end=new Date('2030-12-31'); }
+  else { start=new Date(CLIMATE_START); end=new Date(CLIMATE_END); }
 
   const times=[], qs=[], ts=[], ps=[];
   const QmaxT = h.capacityMW*1e6/(1000*9.81*h.head*h.eff);
@@ -563,11 +745,19 @@ function syntheticData(h, mode){
     times.push(d.toISOString().slice(0,10));
     const doy = Math.floor((d - new Date(d.getFullYear(),0,0))/864e5);
     const ang = (doy/365.25)*2*Math.PI;
-    const spring = Math.exp(-Math.pow((doy-130)/45,2));
+    const yr = d.getFullYear();
+    const trendY = mode === 'climate' ? (yr - 2025) * 0.045 : 0; // имитация потепления
+    const spring = Math.exp(-Math.pow((doy - (mode==='climate' ? 130 - trendY*18 : 130))/45, 2));
     const noise = 0.85 + 0.3*Math.sin(ang*7+seed) + 0.15*Math.sin(ang*23+seed*2);
-    qs.push(Math.max(50, Qmean*(0.35 + 1.4*spring)*noise));
-    ts.push(5 + latF*3 + (13+latF*5)*Math.sin(ang - Math.PI/2 - 0.2) + 1.5*Math.sin(ang*5+seed));
+    qs.push(Math.max(50, Qmean*(0.35 + 1.4*spring)*noise*(1 + trendY*0.01)));
+    ts.push(5 + trendY + latF*3 + (13+latF*5)*Math.sin(ang - Math.PI/2 - 0.2) + 1.5*Math.sin(ang*5+seed));
     ps.push(Math.max(0, 1.8 + 1.2*Math.sin(ang+1) + 0.6*Math.sin(ang*6+seed)));
+  }
+  if (mode === 'climate'){
+    /* синтетика — лишь заглушка: прогоняем её через ту же физическую
+       схему стока, что и реальный ансамбль, ради согласованности */
+    const q = climateRunoff(h, ts, ps);
+    return { hydro:{time:times,q}, clim:{time:times,t:ts,p:ps} };
   }
   return { hydro:{time:times,q:qs}, clim:{time:times,t:ts,p:ps} };
 }
@@ -592,16 +782,8 @@ async function fetchFromAPI(h, mode){
              clim:{time:a.daily.time, t:a.daily.temperature_2m_mean, p:a.daily.precipitation_sum} };
   }
   if (mode === 'climate'){
-    const a = await fetchWithRetry(
-      `https://climate-api.open-meteo.com/v1/climate?latitude=${h.lat}&longitude=${h.lon}&start_date=2025-01-01&end_date=2030-12-31&models=MRI_AGCM3_2_S&daily=temperature_2m_mean,precipitation_sum`, 25000);
-    const t = a.daily.temperature_2m_mean_MRI_AGCM3_2_S || a.daily.temperature_2m_mean;
-    const p = a.daily.precipitation_sum_MRI_AGCM3_2_S || a.daily.precipitation_sum;
-    const QmaxT = h.capacityMW*1e6/(1000*9.81*h.head*h.eff);
-    const Qmean = 0.4*QmaxT;
-    const valid = p.filter(v => v != null);
-    const Pmean = valid.length ? valid.reduce((s,v)=>s+v,0)/valid.length : 2;
-    const q = p.map(P => Math.max(0, Qmean*(0.4 + 0.8*(P||0)/Math.max(0.1,Pmean))));
-    return { hydro:{time:a.daily.time, q}, clim:{time:a.daily.time, t, p} };
+    /* CMIP6-ансамбль + bias-коррекция + физика снега/льда (см. fetchClimateData) */
+    return await fetchClimateData(h);
   }
   throw new Error('unknown mode');
 }
