@@ -40,8 +40,16 @@ const CHART_THROTTLE_MS = 80;
    ============================================================ */
 const CMIP6_MODELS = ['EC_Earth3P_HR', 'CMCC_CM2_VHR4', 'MRI_AGCM3_2_S'];
 const SSP_LABELS = { ssp126:'SSP1-2.6', ssp370:'SSP3-7.0', ssp585:'SSP5-8.5' };
+/* Горизонт ряда. Проверено на живом эндпоинте: для моделей этого ансамбля
+   climate-api отдаёт данные максимум по 2050-12-31 включительно, а на
+   end_date >= 2051 отвечает {"error":true,"reason":"Bad Request"}.
+   Прежний конец 2060-12-31 давал 400 на КАЖДОМ запросе, из-за чего весь
+   режим «Климат» скатывался в синтетику с плашкой «climate-api недоступен». */
 const CLIMATE_START = '2025-01-01';
-const CLIMATE_END   = '2060-12-31';
+const CLIMATE_END   = '2050-12-31';
+/* Запас при автоматическом откате горизонта: сколько дней отступаем назад
+   при ответе «дата вне доступного диапазона». */
+const CLIMATE_FALLBACK_STEP_DAYS = 366;
 /* исторический базовый период ERA5 для bias-коррекции ансамбля */
 const REF_START = '1991-01-01';
 const REF_END   = '2020-12-31';
@@ -134,6 +142,9 @@ const S = {
 let animAcc = 0, animLast = 0;
 let apiAvailable = null;
 let climateApiAvailable = null;
+/* Причина, по которой climate-эндпоинт посчитан недоступным — показываем
+   её в статусе вместо абстрактного «climate.api недоступен». */
+let lastClimateError = '';
 
 /* ============================================================
    УТИЛИТЫ
@@ -196,6 +207,25 @@ async function fetchWithRetry(url, ms=10000, tries=2){
   throw lastErr;
 }
 
+/* HTTP-ответы (4xx/5xx) — это НЕ «сеть недоступна»: сервер отвечал, просто
+   отклонил запрос (например Climate API честно возвращает error:true на
+   неподдерживаемую модель или дату). Их текст нужен для диагностики, а вот
+   сетевые ошибки (AbortError/Failed to fetch) должны оставаться без текста,
+   иначе в статусе появляется пугающее «API недоступно: signal is aborted». */
+function apiErrorText(e){
+  if (!e) return '';
+  const m = String(e.message || e);
+  if (/^HTTP \d{3}$/.test(m)) return m;
+  if (/abort|network|load failed|failed to fetch/i.test(m)) return '';
+  return m;
+}
+
+/* Ошибки формата запроса (400/404/422): повторять их бессмысленно, и они не
+   означают недоступность хоста. */
+function isBadRequest(e){
+  return /HTTP 400|HTTP 404|HTTP 422|Bad Request|Invalid value/i.test(String((e && e.message) || e));
+}
+
 /* ============================================================
    КЭШ
    ============================================================ */
@@ -230,12 +260,15 @@ function getStaleCached(mode,id){
   return e ? e.data : null;
 }
 function compressData(data){
-  return {
+  const out = {
     hydro: { time: data.hydro.time, q: data.hydro.q.map(v => v==null?null:Math.round(v)) },
     clim: { time: data.clim.time,
       t: data.clim.t.map(v => v==null?null:Math.round(v*10)/10),
       p: data.clim.p.map(v => v==null?null:Math.round(v*10)/10) }
   };
+  /* метаданные ансамбля (модели/SSP/bias) нужны для подписи в графике */
+  if (data.meta) out.meta = data.meta;
+  return out;
 }
 function setCached(mode,id,data){
   const a=readCacheAll(); const key=cacheKey(mode); if(!a[key]) a[key]={};
@@ -250,30 +283,54 @@ function setCached(mode,id,data){
    ответил хотя бы один. Одиночный короткий пинг, как раньше, при любой
    сетевой заминке навсегда помечал приложение "офлайн". */
 let lastApiError = '';
+
+const CLIMATE_PROBE_URL =
+  'https://climate-api.open-meteo.com/v1/climate?latitude=55&longitude=37' +
+  `&start_date=${CLIMATE_START}&end_date=2025-01-03` +
+  `&models=${CMIP6_MODELS.join(',')}` +
+  '&daily=temperature_2m_mean,precipitation_sum&scenario=ssp585';
+
+/* Climate API ошибки формата ответа отдаёт телом {"error":true,"reason":...}
+   с HTTP 200, поэтому fetchWithTimeout их не видит — разбираем явно. */
+async function fetchJsonChecked(url, ms){
+  const j = await fetchWithTimeout(url, ms);
+  if (j && j.error === true) throw new Error(j.reason || 'Climate API отклонил запрос');
+  return j;
+}
+
+/* Пинг климатического хоста: успех = эндпоинт жив и отдаёт ряд по всем
+   моделям ансамбля. Ответ сервера (даже с текстом ошибки) доказывает, что
+   хост доступен, поэтому такие случаи не считаем «нет сети». */
+async function pingClimateAPI(){
+  try {
+    const j = await fetchJsonChecked(CLIMATE_PROBE_URL, 12000);
+    climateApiAvailable = !!(j.daily && Array.isArray(j.daily.time) && j.daily.time.length);
+    if (!climateApiAvailable) lastClimateError = 'пустой ответ climate-api';
+  } catch(e){
+    climateApiAvailable = false;
+    lastClimateError = apiErrorText(e) || 'сеть недоступна';
+  }
+  return climateApiAvailable;
+}
+
 async function pingAPI(){
   const probes = [
     'https://api.open-meteo.com/v1/forecast?latitude=55&longitude=37&daily=temperature_2m_mean&forecast_days=1',
     'https://archive-api.open-meteo.com/v1/archive?latitude=55&longitude=37&start_date=2024-01-01&end_date=2024-01-03&daily=temperature_2m_mean',
-    'https://flood-api.open-meteo.com/v1/flood?latitude=55&longitude=37&daily=river_discharge&forecast_days=1',
-    /* climate-хост проверяем отдельно: без него режим «Климат» молча
-       уходил в синтетику, даже когда остальные API были доступны */
-    'https://climate-api.open-meteo.com/v1/climate?latitude=55&longitude=37&start_date=2025-01-01&end_date=2025-01-03&daily=temperature_2m_mean'
+    'https://flood-api.open-meteo.com/v1/flood?latitude=55&longitude=37&daily=river_discharge&forecast_days=1'
   ].map(u => fetchWithTimeout(u, 8000));
   try {
     await Promise.any(probes);
     apiAvailable = true;
+    lastApiError = '';
   } catch(e){
     apiAvailable = false;
-    lastApiError = (e && e.errors && e.errors[0] && e.errors[0].message) || '';
+    lastApiError = apiErrorText(e && e.errors && e.errors[0]) || '';
     console.warn('Open-Meteo недоступен:', lastApiError || e);
   }
-  /* отдельный флаг доступности климатического эндпоинта */
-  try {
-    await fetchWithTimeout(probes[3], 8000);
-    climateApiAvailable = true;
-  } catch(e){
-    climateApiAvailable = false;
-  }
+  /* climate-хост проверяем отдельно: без него режим «Климат» молча
+     уходил в синтетику, даже когда остальные API были доступны */
+  await pingClimateAPI();
   ensureOfflineRetry();
 }
 
@@ -283,9 +340,15 @@ let offlineRetryTimer = null;
 function ensureOfflineRetry(){
   if (offlineRetryTimer) return;
   offlineRetryTimer = setInterval(async () => {
-    if (apiAvailable !== false) return;
+    /* Перепроверяем и полный офлайн, и случай «сеть есть, но climate-api
+       лежит» — иначе режим «Климат» оставался на синтетике до перезагрузки
+       страницы. */
+    const needGlobal   = apiAvailable === false;
+    const needClimate  = S.mode === 'climate' && climateApiAvailable === false;
+    if (!needGlobal && !needClimate) return;
     await pingAPI();
-    if (apiAvailable === true && !S.loading) loadPeriod(S.mode);
+    if (apiAvailable === true && !S.loading &&
+        (!needClimate || climateApiAvailable === true)) loadPeriod(S.mode);
   }, 30000);
 }
 
@@ -613,6 +676,53 @@ function parseClimateEnsemble(json, variable){ // variable: 'temperature_2m_mean
   return { time, mean, nModels: series.length };
 }
 
+/* Запрос к Climate API с авто-подстройкой под реальные ограничения
+   эндпоинта. Порядок: полный ансамбль → одна модель (исторический ряд) →
+   откат end_date, если дата оказалась вне доступного горизонта.
+   Возвращает распарсенный json; бросает исключение только при сетевом
+   сбое или при ответе без ряда. */
+async function fetchClimateJson(params, ms){
+  const BASE = 'https://climate-api.open-meteo.com/v1/climate';
+  const variants = [
+    { models: CMIP6_MODELS.join(','), start: params.start, end: params.end },
+    /* Часть моделей в историческом ряду отсутствует (например
+       EC_Earth3P_HR покрывает только 2025–2050): тогда просим ту модель,
+       которая реально доступна — bias-коррекция по одной CMIP6-модели всё
+       равно корректна физически. */
+    { models: CMIP6_MODELS[0], start: params.start, end: params.end },
+    { models: CMIP6_MODELS[1], start: params.start, end: params.end },
+    { models: CMIP6_MODELS[2], start: params.start, end: params.end }
+  ];
+  let lastErr;
+  for (const v of variants){
+    let end = v.end;
+    for (let attempt = 0; attempt < 4; attempt++){
+      const url = `${BASE}?latitude=${params.lat}&longitude=${params.lon}` +
+        `&start_date=${v.start}&end_date=${end}` +
+        `&models=${v.models}&daily=${params.daily}&scenario=${params.scenario}`;
+      try {
+        const j = await fetchJsonChecked(url, ms);
+        if (j.daily && Array.isArray(j.daily.time) && j.daily.time.length) return j;
+        lastErr = new Error('Climate API: пустой ответ');
+      } catch(e){
+        lastErr = e;
+        /* Дата вне диапазона — отступаем назад и пробуем снова */
+        if (/date|range/i.test(String(e.message || '')) && attempt < 3){
+          const d = new Date(end + 'T00:00:00Z');
+          d.setUTCDate(d.getUTCDate() - CLIMATE_FALLBACK_STEP_DAYS);
+          const next = d.toISOString().slice(0, 10);
+          if (next <= v.start) break;
+          end = next;
+          continue;
+        }
+        break;   /* ошибка модели/сценария — пробуем следующий вариант */
+      }
+    }
+    await sleep(200);
+  }
+  throw lastErr || new Error('Climate API: нет данных');
+}
+
 /* Bias-коррекция ансамбля по историческому базовому периоду ERA5
    (1991–2020): температура — аддитивная поправка, осадки —
    мультипликативный масштаб (не ниже 0.3, чтобы не «схлопнуть» сигнал). */
@@ -622,11 +732,8 @@ async function fetchClimateBias(h){
       `https://archive-api.open-meteo.com/v1/archive?latitude=${h.lat}&longitude=${h.lon}` +
       `&start_date=${REF_START}&end_date=${REF_END}` +
       `&daily=temperature_2m_mean,precipitation_sum&timezone=UTC`, 30000),
-    fetchWithRetry(
-      `https://climate-api.open-meteo.com/v1/climate?latitude=${h.lat}&longitude=${h.lon}` +
-      `&start_date=${REF_START}&end_date=${REF_END}` +
-      `&models=${CMIP6_MODELS.join(',')}&daily=temperature_2m_mean,precipitation_sum` +
-      `&scenario=historical`, 45000)
+    fetchClimateJson({ lat:h.lat, lon:h.lon, start:REF_START, end:REF_END,
+      daily:'temperature_2m_mean,precipitation_sum', scenario:'historical' }, 45000)
   ]);
   const rt = refRaw.daily.temperature_2m_mean, rp = refRaw.daily.precipitation_sum;
   const et = parseClimateEnsemble(ensHist, 'temperature_2m_mean').mean;
@@ -647,20 +754,23 @@ async function fetchClimateBias(h){
    bias-коррекция по ERA5, детерминированный сток через снежной/ледовой баланс.
    Возвращает { hydro, clim, meta }. */
 async function fetchClimateData(h){
-  if (climateApiAvailable === false) throw new Error('climate-api недоступен');
-  const url =
-    `https://climate-api.open-meteo.com/v1/climate?latitude=${h.lat}&longitude=${h.lon}` +
-    `&start_date=${CLIMATE_START}&end_date=${CLIMATE_END}` +
-    `&models=${CMIP6_MODELS.join(',')}` +
-    `&daily=temperature_2m_mean,precipitation_sum&scenario=${S.ssp}`;
+  /* Флаг доступности обновляем на живой попытке, а не только при старте:
+     раньше разовый неудачный пинг навешивал «climate-api недоступен» до
+     перезагрузки страницы. */
+  if (climateApiAvailable === false){
+    const ok = await pingClimateAPI();
+    if (!ok) throw new Error('climate-api недоступен' + (lastClimateError ? ': ' + lastClimateError : ''));
+  }
   const [raw, bias] = await Promise.all([
-    fetchWithRetry(url, 60000),
+    fetchClimateJson({ lat:h.lat, lon:h.lon, start:CLIMATE_START, end:CLIMATE_END,
+      daily:'temperature_2m_mean,precipitation_sum', scenario:S.ssp }, 60000),
     fetchClimateBias(h).catch(e => {
       console.warn('bias-коррекция недоступна, берётся сырой ансамбль:', e.message);
       return { dT: 0, rP: 1 };
     })
   ]);
-  if (raw.error) throw new Error(raw.reason || 'ошибка Climate API');
+  climateApiAvailable = true;
+  lastClimateError = '';
 
   const T0 = parseClimateEnsemble(raw, 'temperature_2m_mean');
   const P0 = parseClimateEnsemble(raw, 'precipitation_sum');
@@ -797,10 +907,19 @@ async function loadStation(h, mode){
     setCached(mode, h.id, data);
     return { data, source: 'api' };
   } catch(e){
-    lastApiError = e.message || String(e);
+    /* Ошибка формата запроса или недоступность climate-хоста — это НЕ «нет
+       сети»: глобальный флаг apiAvailable трогать нельзя, иначе отказ одного
+       эндпоинта переводил в синтетику все режимы. */
+    const msg = e.message || String(e);
+    if (/climate/i.test(msg)){
+      lastClimateError = apiErrorText(e) || msg;
+      console.warn(`Станция ${h.name} (климат): ${msg}`);
+    } else if (!isBadRequest(e)){
+      lastApiError = apiErrorText(e) || '';
+    }
     const stale = getStaleCached(mode, h.id);
     if (stale) return { data: stale, source: 'cache' };
-    console.warn(`Станция ${h.name}: ${e.message}`);
+    console.warn(`Станция ${h.name}: ${msg}`);
     return { data: syntheticData(h, mode), source: 'synth' };
   }
 }
@@ -934,7 +1053,7 @@ async function loadPeriod(mode){
     item.querySelector('.src').className = 'src loading';
     item.querySelector('.mw').textContent = '…';
   });
-  setStatus(`<span class="warn">загрузка</span> · ${mode}`);
+  setStatus(`<span class="warn">загрузка</span> · ${modeLabel(mode)}`);
 
   let fromCache = 0;
   HPPS.forEach(h => {
@@ -982,9 +1101,13 @@ async function loadPeriod(mode){
   if (apiAvailable){
     const all = readCacheAll();
     const now = Date.now();
+    /* Ключ кэша для климата зависит от SSP — читать записи надо по тому же
+       ключу, по которому они пишутся (all[cacheKey(mode)]), иначе проверка
+       «протухания» никогда не срабатывала. */
+    const key = cacheKey(mode);
     stale = HPPS.filter(h => {
       if (!S.cache[mode][h.id]) return false;
-      const e = all[mode]?.[h.id];
+      const e = all[key]?.[h.id];
       return e && (now - e.ts > REVALIDATE_MS[mode]);
     });
   }
@@ -1029,15 +1152,27 @@ async function loadPeriod(mode){
   if (fromCache) parts.push(`<span class="warn">🟡 ${fromCache} из кэша</span>`);
   if (countApi)  parts.push(`<span class="ok">🟢 ${countApi} онлайн</span>`);
   if (countSynth){
-    parts.push(`<span class="err">🔴 ${countSynth} офлайн</span>`);
-    if (!countApi && !fromCache){
-      parts.push(`<span class="err">API недоступно${lastApiError ? ': '+lastApiError : ''}</span>`);
-      parts.push(`<span class="warn">повторная проверка каждые 30 с · или нажмите ⟳</span>`);
+    /* Для режима «Климат» честно пишем, что именно не так: отсутствие сети
+       или недоступность climate-api. Раньше любая ошибка климатического
+       хоста выдавалась как «API недоступно», и режим выглядел сломанным. */
+    if (mode === 'climate' && apiAvailable){
+      parts.push(`<span class="err">🔴 ${countSynth} синтетика</span>`);
+      parts.push(`<span class="err">climate-api недоступен${lastClimateError ? ': ' + lastClimateError : ''}</span>`);
+      parts.push(`<span class="warn">перепроверка каждые 30 с · или нажмите ⟳</span>`);
+    } else {
+      parts.push(`<span class="err">🔴 ${countSynth} офлайн</span>`);
+      if (!countApi && !fromCache){
+        parts.push(`<span class="err">API недоступно${lastApiError ? ': '+lastApiError : ''}</span>`);
+        parts.push(`<span class="warn">повторная проверка каждые 30 с · или нажмите ⟳</span>`);
+      }
     }
   }
-  setStatus(`<b>${mode}</b> · ${parts.join(' · ')}`);
+  setStatus(`<b>${modeLabel(mode)}</b> · ${parts.join(' · ')}`);
   S.loading = false;
 }
+
+const MODE_LABELS = { history:'История', forecast:'Прогноз', climate:'Климат' };
+function modeLabel(m){ return MODE_LABELS[m] || m; }
 
 /* ============================================================
    ПАРАМЕТРЫ ВОЛНЫ (с учётом WAVE_SCALE)
