@@ -3,29 +3,53 @@
    flowDir — направление течения вниз по реке (0=С, 90=В, 180=Ю).
    ============================================================ */
 const HPPS = [
-  /* Новые ГТС Северного Кавказа (данные: РусГидро/Википедия + проектная таблица).
-     Гизельдонская: координаты плотины у завала Кахты-Сар; напор 289 м — деривационный.
-     Баксанская: координаты головного узла (волна от водосливной плотины). */
-  {id:'giz', name:'Гизельдонская ГЭС', river:'Гизельдон', lat:42.8785, lon:44.4503, flowDir:15,
-   capacityMW:22.8, head:289, nmu:1176, umo:1175.73, areaNMU:10.81, totalVolume:0.015, usefulVolume:0.00293,
-   eff:.85, year:1934, terrainAmpl:800, reservoirName:'Гизельдонское',
-   resCoords:'42°52′34″ N, 44°26′57″ E',
-   damH:21.5, breachW:100, chanW0:30, chanW1:140,
-   damType:'грунтовая каменно-набросная, 21,5 м'},
-  {id:'gun', name:'Гунибская ГЭС им. Р. Гамзатова', river:'Каракойсу', lat:42.4317, lon:46.9869, flowDir:5,
-   capacityMW:15, head:110, nmu:863.5, umo:862, areaNMU:0.6, totalVolume:0.01058, usefulVolume:0.00087,
-   eff:.93, year:2005, terrainAmpl:600, reservoirName:'Гунибское',
-   resCoords:'42°25′13″ N, 46°58′44″ E',
-   damH:73.3, breachW:45, chanW0:40, chanW1:200,
-   damType:'бетонная арочная с пробкой, 73,3 м'},
-  {id:'bak', name:'Баксанская ГЭС', river:'Баксан', lat:43.6056, lon:43.3056, flowDir:76,
-   capacityMW:27, head:88.53, nmu:647.2, umo:645, areaNMU:0.072, totalVolume:0.00016, usefulVolume:0.00015,
-   eff:.93, year:1936, terrainAmpl:900, reservoirName:'Деривационный канал Баксанской ГЭС',
-   damH:6, breachW:55, chanW0:40, chanW1:180,
-   damType:'бетонная водосливная, ≈6 м'}
+  /* Малые ГТС Карельского перешейка (Выборгский р-н). Данные: файл пользователя
+     «Данные ГЭС.docx»; координаты плотин: OSM/Wikimapia/vokrug-ladogi.ru.
+     Поля, по которым в паспорте «нет данных», помечены «~» (рабочая оценка для модели). */
+  {id:'krav', name:'Кравцовская МГЭС', river:'Селезнёвка', lat:60.7680, lon:28.5707, flowDir:115,
+   capacityMW:0.2, powerLabel:'нет данных (~0,2 МВт)', head:2.5, nmu:10.5, umo:8, areaNMU:0.03,
+   totalVolume:0.00008, usefulVolume:0.00002, eff:.82, year:1943, terrainAmpl:50,
+   reservoirName:'пруд Кравцовской МГЭС', damH:3, breachW:29, chanW0:8, chanW1:45,
+   damType:'IV класс, гребень 29×1 м, напор 2,5 м (82 года эксплуатации)',
+   note:'с 2025 г. идёт демонтаж старой плотины'},
+  {id:'yash', name:'Яшинская МГЭС (Вахвиала)', river:'Бусловка', lat:60.8031, lon:28.4953, flowDir:250,
+   capacityMW:1.2, powerLabel:'до 1,2 МВт', head:6, nmu:16, umo:14, areaNMU:0.03,
+   totalVolume:0.00009, usefulVolume:0.00003, eff:.85, year:1896, terrainAmpl:50,
+   reservoirName:'пруд Яшинской МГЭС', damH:2, breachW:18.3, chanW0:10, chanW1:50,
+   damType:'водослив с широким порогом, 3 пролёта, высота 2 м',
+   note:'апрель 2025: объявлен тендер на снос ГТС'},
+  {id:'andr', name:'Андреевская ГЭС', river:'Андреевка (Тукалус-Йоки)', lat:60.71815, lon:28.1786, flowDir:170,
+   capacityMW:0.6, powerLabel:'0,6 МВт', head:7, nmu:99, umo:96.5, areaNMU:0.045,
+   totalVolume:0.00012, usefulVolume:0.00004, eff:.85, year:1950, terrainAmpl:50,
+   reservoirName:'пруд Андреевской ГЭС', damH:2.5, breachW:20, chanW0:6, chanW1:35,
+   damType:'каменная кладка 2–3 м, деривационная',
+   note:'НПУ 99 м — условная отметка; проект реконструкции 2021 г.'},
+  {id:'pero', name:'Перовская МГЭС («Феррариа»)', river:'Перовка', lat:60.67992, lon:28.95119, flowDir:295,
+   capacityMW:0.15, powerLabel:'нет данных (~0,15 МВт)', head:5.5, nmu:17.5, umo:12, areaNMU:0.03,
+   totalVolume:0.00008, usefulVolume:0.00002, eff:.82, year:1905, terrainAmpl:50,
+   reservoirName:'пруд Перовской МГЭС', damH:10, breachW:27, chanW0:10, chanW1:55,
+   damType:'двухсекционный водосброс, деревянные щиты, ≈10 м',
+   note:''},
+  {id:'igla', name:'Плотина затопления «Игла»', river:'Перовка', lat:60.52897, lon:29.16467, flowDir:315,
+   capacityMW:0, powerLabel:'не ГЭС', notHPP:true, head:3, nmu:52.5, umo:47, areaNMU:0.14,
+   totalVolume:0.0004, usefulVolume:0.0001, eff:.8, year:1938, terrainAmpl:50,
+   reservoirName:'зона затопления (несколько км)', damH:5.5, breachW:60, chanW0:12, chanW1:60,
+   damType:'плотина затопления, 1938 г., тело >5 м',
+   note:'создаёт многокилометровую зону затопления'},
+  {id:'rokk', name:'Плотина хутора Роккаланмяки (руины)', river:'Птичья', lat:60.2913, lon:29.8017, flowDir:290,
+   capacityMW:0.05, powerLabel:'нет данных (лесопильня)', head:1.25, nmu:74.5, umo:73, areaNMU:0.01,
+   totalVolume:0.00002, usefulVolume:0.000005, eff:.8, year:1930, terrainAmpl:80,
+   reservoirName:'пруд хутора Роккаланмяки', damH:1.5, breachW:15, chanW0:4, chanW1:25,
+   damType:'щитовая, 2–3 пролёта, один разрушен; подъём 1–1,5 м',
+   note:''},
+  {id:'alak', name:'Алакусская ГЭС', river:'Пчелинка', lat:60.6077, lon:29.5165, flowDir:335,
+   capacityMW:0.1, powerLabel:'нет данных (~0,1 МВт)', head:2, nmu:22, umo:20, areaNMU:0.04,
+   totalVolume:0.0001, usefulVolume:0.00003, eff:.83, year:1948, terrainAmpl:50,
+   reservoirName:'Алакусский пруд', damH:2, breachW:25, chanW0:6, chanW1:40,
+   damType:'плотина 1948 г. (строители — студенты ЛПИ им. Калинина)',
+   note:''}
 ];
-
-const PRIORITY = ['giz', 'gun', 'bak'];
+const PRIORITY = ['krav','yash','andr','pero','igla','rokk','alak'];
 const HISTORY_START = '2023-01-01';
 const CHART_WINDOW = 60;
 const CHART_THROTTLE_MS = 80;
@@ -43,7 +67,7 @@ const WAVE_SCALE = 1.0;
 /* attributionControl выключен и добавлен вручную с prefix:false —
    убирает префикс «🇺🇦 Leaflet», но СОХРАНЯЕТ копирайты OSM/OTM/Esri. */
 const map = L.map('map', { zoomControl:true, preferCanvas:true, attributionControl:false })
-  .setView([43.15, 44.95], 8);
+  .setView([60.62, 28.75], 9);
 L.control.attribution({ position:'bottomright', prefix: false }).addTo(map);
 
 const baseLayers = {
@@ -592,21 +616,45 @@ async function fetchFromAPI(h, mode){
              clim:{time:a.daily.time, t:a.daily.temperature_2m_mean, p:a.daily.precipitation_sum} };
   }
   if (mode === 'climate'){
-    const a = await fetchWithRetry(
-      `https://climate-api.open-meteo.com/v1/climate?latitude=${h.lat}&longitude=${h.lon}&start_date=2025-01-01&end_date=2030-12-31&models=MRI_AGCM3_2_S&daily=temperature_2m_mean,precipitation_sum`, 25000);
-    const t = a.daily.temperature_2m_mean_MRI_AGCM3_2_S || a.daily.temperature_2m_mean;
-    const p = a.daily.precipitation_sum_MRI_AGCM3_2_S || a.daily.precipitation_sum;
-    const QmaxT = h.capacityMW*1e6/(1000*9.81*h.head*h.eff);
-    const Qmean = 0.4*QmaxT;
-    const valid = p.filter(v => v != null);
-    const Pmean = valid.length ? valid.reduce((s,v)=>s+v,0)/valid.length : 2;
+    /* Климатический режим — ТОЛЬКО файл пользователя «модель клим.xlsx»
+       (climate-data.js): CMIP6 ens-mean SSP5-8.5, осадки мм/день помесячно,
+       история 1985–2025 + будущее 2041–2070. Внешние климатические API
+       не вызываются. */
+    const cd = (typeof CLIMATE_DATA !== 'undefined') ? CLIMATE_DATA[h.id] : null;
+    if (!cd || !cd.hist || !cd.hist.length) throw new Error('нет климатической модели для станции');
+    const time = [], p = [], t = [];
+    const rows = cd.hist.concat(cd.fut || []);
+    for (const row of rows){
+      const y = row[0];
+      for (let m = 0; m < 12; m++){
+        const v = row[m+1];
+        if (v == null) continue;
+        time.push(`${y}-${String(m+1).padStart(2,'0')}-15`);
+        p.push(v * new Date(y, m+1, 0).getDate());   // мм/день → мм/мес
+        t.push(null);
+      }
+    }
+    const QmaxT = Math.max(h.capacityMW, 0.05) * 1e6 / (1000*9.81*h.head*h.eff);
+    const Qmean = Math.max(0.02, 0.4*QmaxT);
+    const valid = p.filter(v => v != null && v > 0);
+    const Pmean = valid.length ? valid.reduce((s,v)=>s+v,0)/valid.length : 50;
     const q = p.map(P => Math.max(0, Qmean*(0.4 + 0.8*(P||0)/Math.max(0.1,Pmean))));
-    return { hydro:{time:a.daily.time, q}, clim:{time:a.daily.time, t, p} };
+    return { hydro:{time, q}, clim:{time, t, p} };
   }
   throw new Error('unknown mode');
 }
 
 async function loadStation(h, mode){
+  /* Климатический режим — встроенные данные (climate-data.js), сеть не нужна */
+  if (mode === 'climate'){
+    try {
+      const data = await fetchFromAPI(h, mode);
+      return { data, source: 'api' };
+    } catch(e){
+      console.warn(`Климат ${h.name}: ${e.message}`);
+      return { data: syntheticData(h, mode), source: 'synth' };
+    }
+  }
   if (apiAvailable === false){
     return { data: syntheticData(h, mode), source: 'synth' };
   }
@@ -765,7 +813,7 @@ async function loadPeriod(mode){
       const item = document.querySelector(`.hppItem[data-id="${h.id}"]`);
       if (item){
         item.querySelector('.src').className = 'src cache';
-        item.querySelector('.mw').textContent = h.capacityMW + ' МВт';
+        item.querySelector('.mw').textContent = capLabel(h);
       }
     }
   });
@@ -827,7 +875,7 @@ async function loadPeriod(mode){
       const item = document.querySelector(`.hppItem[data-id="${h.id}"]`);
       if (item){
         item.querySelector('.src').className = 'src ' + source;
-        item.querySelector('.mw').textContent = h.capacityMW + ' МВт';
+        item.querySelector('.mw').textContent = capLabel(h);
       }
 
       if (!S.dates.length){
@@ -1573,6 +1621,13 @@ function render(){
   if (S.selected) updateChart();
 }
 
+function fmtMW(v){
+  if (!v) return '0 МВт';
+  return v >= 1 ? v.toFixed(0)+' МВт' : (v*1000).toFixed(0)+' кВт';
+}
+function capLabel(h){
+  return h.powerLabel ? h.powerLabel : ((h.capacityMW || 0) + ' МВт');
+}
 function popupHTML(h, r, i, col, isBroken, overtop){
   const P = r.power[i], lf = r.lf[i]*100;
   const src = S.sources[h.id];
@@ -1580,15 +1635,15 @@ function popupHTML(h, r, i, col, isBroken, overtop){
   const status = isBroken ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">💥 ПЛОТИНА РАЗРУШЕНА</div>'
               : overtop ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">⚠ КРИТИЧЕСКИЙ УРОВЕНЬ</div>' : '';
   return `<h4>${h.name}</h4>
-  <div style="color:#8ba0b6;margin-bottom:8px">р. ${h.river} · ${h.capacityMW} МВт · ${srcLabel}</div>
+  <div style="color:#8ba0b6;margin-bottom:8px">р. ${h.river} · ${capLabel(h)} · ${srcLabel}</div>
   ${status}
-  <div class="kv"><span>Мощность</span><span style="color:${col};font-weight:700">${P.toFixed(0)} МВт</span></div>
+  <div class="kv"><span>Мощность</span><span style="color:${col};font-weight:700">${h.notHPP ? '—' : fmtMW(P)}</span></div>
   <div class="kv"><span>Загрузка</span><span>${lf.toFixed(1)} %</span></div>
   <div class="kv"><span>Уровень ВБ</span><span>${r.level[i].toFixed(2)} м</span></div>
   <div class="kv"><span>Напор</span><span>${r.head[i].toFixed(1)} м</span></div>
-  <div class="kv"><span>Расход</span><span>${r.flow[i].toFixed(0)} м³/с</span></div>
-  <div class="kv"><span>Сброс</span><span>${r.spill[i].toFixed(0)} м³/с</span></div>
-  <div class="kv"><span>Зеркало</span><span>${r.area[i].toFixed(0)} км²</span></div>`;
+  <div class="kv"><span>Расход</span><span>${r.flow[i].toFixed(1)} м³/с</span></div>
+  <div class="kv"><span>Сброс</span><span>${r.spill[i].toFixed(1)} м³/с</span></div>
+  <div class="kv"><span>Зеркало</span><span>${r.area[i].toFixed(2)} км²</span></div>`;
 }
 
 /* ============================================================
@@ -1622,7 +1677,7 @@ async function selectHPP(id, fromList){
     delete S.loadingStation[id];
     if (item){
       item.querySelector('.src').className = 'src ' + source;
-      item.querySelector('.mw').textContent = h.capacityMW + ' МВт';
+      item.querySelector('.mw').textContent = capLabel(h);
     }
     if (!S.dates.length){ S.dates = data.hydro.time; updateTimeline(S.mode); }
     recompute(); render();
@@ -1680,12 +1735,13 @@ function detailsHTML(h){
   ${h.resCoords ? `<div class="kv"><span>Координаты вдхр</span><span>${h.resCoords}</span></div>` : ''}
   <div class="kv"><span>Координаты плотины</span><span>${h.lat.toFixed(4)}, ${h.lon.toFixed(4)}</span></div>
   <div class="kv"><span>Течение (flowDir)</span><span>${h.flowDir}°</span></div>
-  <div class="kv"><span>Установленная мощность</span><span>${h.capacityMW} МВт</span></div>
+  <div class="kv"><span>Установленная мощность</span><span>${capLabel(h)}</span></div>
   <div class="kv"><span>Тип плотины</span><span>${h.damType || '—'}</span></div>
   <div class="kv"><span>Расчётный напор</span><span>${h.head} м</span></div>
+  ${h.note ? `<div class="kv"><span>Примечание</span><span style="color:#ffb02e">${h.note}</span></div>` : ''}
   <div class="kv"><span>НПУ / УМО</span><span>${h.nmu} / ${h.umo} м</span></div>
   <div class="kv ${overtop?'danger':''}"><span>Текущий уровень</span><span>${r.level[i].toFixed(2)} м</span></div>
-  <div class="kv ${overtop?'danger':''}"><span>Текущая мощность</span><span>${r.power[i].toFixed(0)} МВт</span></div>
+  <div class="kv ${overtop?'danger':''}"><span>Текущая мощность</span><span>${h.notHPP ? '—' : fmtMW(r.power[i])}</span></div>
   <div class="kv"><span>Выработка</span><span>${r.kwh/1e9 >= 0.05 ? (r.kwh/1e9).toFixed(1)+' млрд кВт·ч' : (r.kwh/1e6).toFixed(0)+' млн кВт·ч'}</span></div>
   <div style="margin-top:8px;padding:8px 10px;background:rgba(255,59,59,.08);border:1px solid rgba(255,59,59,.25);border-radius:8px;font-size:11px;line-height:1.5">
     <div style="color:#ff6b6b;font-weight:700;margin-bottom:4px">🌊 Волна прорыва — ${wp.type}</div>
