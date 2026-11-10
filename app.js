@@ -8,43 +8,43 @@ const HPPS = [
      Поля, по которым в паспорте «нет данных», помечены «~» (рабочая оценка для модели). */
   {id:'krav', name:'Кравцовская МГЭС', river:'Селезнёвка', lat:60.7680, lon:28.5707, flowDir:115,
    capacityMW:0.2, powerLabel:'нет данных (~0,2 МВт)', head:2.5, nmu:10.5, umo:8, areaNMU:0.03,
-   totalVolume:0.00008, usefulVolume:0.00002, eff:.82, year:1943, terrainAmpl:50,
+   totalVolume:0.00008, usefulVolume:0.00002, eff:.82, year:1943, visMinW:30, terrainAmpl:50,
    reservoirName:'пруд Кравцовской МГЭС', damH:3, breachW:29, chanW0:8, chanW1:45,
    damType:'IV класс, гребень 29×1 м, напор 2,5 м (82 года эксплуатации)',
    note:'с 2025 г. идёт демонтаж старой плотины'},
   {id:'yash', name:'Яшинская МГЭС (Вахвиала)', river:'Бусловка', lat:60.8031, lon:28.4953, flowDir:250,
    capacityMW:1.2, powerLabel:'до 1,2 МВт', head:6, nmu:16, umo:14, areaNMU:0.03,
-   totalVolume:0.00009, usefulVolume:0.00003, eff:.85, year:1896, terrainAmpl:50,
+   totalVolume:0.00009, usefulVolume:0.00003, eff:.85, year:1896, visMinW:35, terrainAmpl:50,
    reservoirName:'пруд Яшинской МГЭС', damH:2, breachW:18.3, chanW0:10, chanW1:50,
    damType:'водослив с широким порогом, 3 пролёта, высота 2 м',
    note:'апрель 2025: объявлен тендер на снос ГТС'},
   {id:'andr', name:'Андреевская ГЭС', river:'Андреевка (Тукалус-Йоки)', lat:60.71815, lon:28.1786, flowDir:170,
    capacityMW:0.6, powerLabel:'0,6 МВт', head:7, nmu:99, umo:96.5, areaNMU:0.045,
-   totalVolume:0.00012, usefulVolume:0.00004, eff:.85, year:1950, terrainAmpl:50,
+   totalVolume:0.00012, usefulVolume:0.00004, eff:.85, year:1950, visMinW:30, terrainAmpl:50,
    reservoirName:'пруд Андреевской ГЭС', damH:2.5, breachW:20, chanW0:6, chanW1:35,
    damType:'каменная кладка 2–3 м, деривационная',
    note:'НПУ 99 м — условная отметка; проект реконструкции 2021 г.'},
   {id:'pero', name:'Перовская МГЭС («Феррариа»)', river:'Перовка', lat:60.67992, lon:28.95119, flowDir:295,
    capacityMW:0.15, powerLabel:'нет данных (~0,15 МВт)', head:5.5, nmu:17.5, umo:12, areaNMU:0.03,
-   totalVolume:0.00008, usefulVolume:0.00002, eff:.82, year:1905, terrainAmpl:50,
+   totalVolume:0.00008, usefulVolume:0.00002, eff:.82, year:1905, visMinW:35, terrainAmpl:50,
    reservoirName:'пруд Перовской МГЭС', damH:10, breachW:27, chanW0:10, chanW1:55,
    damType:'двухсекционный водосброс, деревянные щиты, ≈10 м',
    note:''},
   {id:'igla', name:'Плотина затопления «Игла»', river:'Перовка', lat:60.52897, lon:29.16467, flowDir:315,
    capacityMW:0, powerLabel:'не ГЭС', notHPP:true, head:3, nmu:52.5, umo:47, areaNMU:0.14,
-   totalVolume:0.0004, usefulVolume:0.0001, eff:.8, year:1938, terrainAmpl:50,
+   totalVolume:0.0004, usefulVolume:0.0001, eff:.8, year:1938, visMinW:45, terrainAmpl:50,
    reservoirName:'зона затопления (несколько км)', damH:5.5, breachW:60, chanW0:12, chanW1:60,
    damType:'плотина затопления, 1938 г., тело >5 м',
    note:'создаёт многокилометровую зону затопления'},
   {id:'rokk', name:'Плотина хутора Роккаланмяки (руины)', river:'Птичья', lat:60.2913, lon:29.8017, flowDir:290,
    capacityMW:0.05, powerLabel:'нет данных (лесопильня)', head:1.25, nmu:74.5, umo:73, areaNMU:0.01,
-   totalVolume:0.00002, usefulVolume:0.000005, eff:.8, year:1930, terrainAmpl:80,
+   totalVolume:0.00002, usefulVolume:0.000005, eff:.8, year:1930, visMinW:22, terrainAmpl:80,
    reservoirName:'пруд хутора Роккаланмяки', damH:1.5, breachW:15, chanW0:4, chanW1:25,
    damType:'щитовая, 2–3 пролёта, один разрушен; подъём 1–1,5 м',
    note:''},
   {id:'alak', name:'Алакусская ГЭС', river:'Пчелинка', lat:60.6077, lon:29.5165, flowDir:335,
    capacityMW:0.1, powerLabel:'нет данных (~0,1 МВт)', head:2, nmu:22, umo:20, areaNMU:0.04,
-   totalVolume:0.0001, usefulVolume:0.00003, eff:.83, year:1948, terrainAmpl:50,
+   totalVolume:0.0001, usefulVolume:0.00003, eff:.83, year:1948, visMinW:32, terrainAmpl:50,
    reservoirName:'Алакусский пруд', damH:2, breachW:25, chanW0:6, chanW1:40,
    damType:'плотина 1948 г. (строители — студенты ЛПИ им. Калинина)',
    note:''}
@@ -125,6 +125,8 @@ function visWidths(w, floor){
   for (let k = 0; k < w.length; k++) out[k] = w[k] > 1 ? Math.max(w[k], floor) : 0;
   return out;
 }
+/* Минимальная визуальная ширина волны для станции: у малых ГТС — десятки метров. */
+function visFloor(h){ return h.visMinW || 500; }
 
 /* ============================================================
    СОСТОЯНИЕ
@@ -1198,7 +1200,7 @@ function simulateDamBreak(h, course, elev){
       let front = 0, hmax = 0;
       const wArr = new Float32Array(N+1);
       for (let k=0;k<=N;k++){
-        wArr[k] = Hd[k] > 0.05 ? Math.min(wCell[k] + 2*mSide*Hd[k], Math.max(wCell[k]*3.5, 500)) : 0;
+        wArr[k] = Hd[k] > 0.05 ? Math.min(wCell[k] + 2*mSide*Hd[k], Math.max(wCell[k]*3.5, h.visMinW ? h.visMinW*4 : 500)) : 0;
         if (Hd[k] > 0.05){ front = k; if (Hd[k] > hmax) hmax = Hd[k]; }
         if (wArr[k] > maxW[k]) maxW[k] = wArr[k];
       }
@@ -1254,7 +1256,7 @@ async function startDamBreak(){
     maxK = Math.max(maxK, 2);
     const footPts = makeBandPolygon(
       chaikinSmooth(sim.line.slice(0, maxK + 1), 1),
-      Array.from(visWidths(sim.maxW.slice(0, maxK + 1), 500)), h.lat);
+      Array.from(visWidths(sim.maxW.slice(0, maxK + 1), visFloor(h))), h.lat);
 
     /* перенос и зум на зону прорыва, чтобы волну было видно */
     const seg = sim.line.slice(0, maxK + 1);
@@ -1297,7 +1299,7 @@ async function startDamBreak(){
       const upto = Math.min(sim.N, Math.max(2, Math.round(fr.front)));
       if (upto > 1){
         const lineTrim = sim.line.slice(0, upto + 1);
-        const wTrim = Array.from(visWidths(fr.w.slice(0, upto + 1), 500));
+        const wTrim = Array.from(visWidths(fr.w.slice(0, upto + 1), visFloor(h)));
         const pts = makeBandPolygon(chaikinSmooth(lineTrim, 1), wTrim, h.lat);
         const depth = Math.min(1, fr.hmax / 15);
         polyAdd(layerFlood, pts, {
