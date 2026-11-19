@@ -32,7 +32,8 @@
     <button class="scenBtn" data-scen="flood">🌊 Паводок</button>
     <button class="scenBtn" data-scen="drought">☀️ Засуха</button>
     <button class="scenBtn danger" data-scen="dam_break">💥 Прорыв</button>
-    <button class="scenBtn" data-scen="release" title="Каскадная модель дополнительного сброса (ваш xlsx) — только Перовская">📤 Сброс</button>
+    <button class="scenBtn" data-scen="release" title="Учебный сценарий дополнительного сброса — только Перовская МГЭС">📤 Сброс</button>
+    <button class="scenBtn reset" data-scen="reset" title="Сбросить сценарий на «Норма»">↺ Сброс настроек</button>
   </div>
   <header style="border-top:1px solid var(--line)">ГЭС <span id="hppCount"></span></header>
   <div id="hppList"></div>
@@ -75,7 +76,7 @@ if ('serviceWorker' in navigator){
   });
 }
 </script>
-<div id="buildStamp">сборка <b>v31 · без Сен-Венана</b></div>
+<div id="buildStamp">сборка <b>v32 · сброс только Перовская</b></div>
 <script src="rivers-data.js"></script>
 <script src="reservoirs-data.js"></script>
 <script src="terrain-data.js"></script>

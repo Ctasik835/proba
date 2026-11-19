@@ -1700,6 +1700,7 @@ function buildUI(){
     list.appendChild(item);
     createMarker(h);
   });
+  updateStationAvailability();
 
   $('slider').oninput = e => { S.idx = +e.target.value; render(); };
   $('playBtn').onclick = togglePlay;
@@ -1709,12 +1710,26 @@ function buildUI(){
       const sc = btn.dataset.scen;
       document.querySelectorAll('.scenBtn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      if (sc === 'reset'){
+        stopDamBreak(); stopRelease();
+        S.scenario = 'normal';
+        document.querySelector('.scenBtn[data-scen="normal"]').classList.add('active');
+        recompute(); render();
+        updateStationAvailability();
+        if (S.selected){
+          const h = HPPS.find(x => x.id === S.selected);
+          $('details').innerHTML = detailsHTML(h);
+          updateChart();
+        }
+        return;
+      }
       if (sc === 'dam_break'){ stopRelease(); S.scenario = 'dam_break'; startDamBreak(); }
       else if (sc === 'release'){ stopDamBreak(); S.scenario = 'release'; startRelease(); }
       else {
         stopDamBreak(); stopRelease();
         S.scenario = sc;
         recompute(); render();
+        updateStationAvailability();
         if (S.selected){
           const h = HPPS.find(x => x.id === S.selected);
           $('details').innerHTML = detailsHTML(h);
@@ -1723,6 +1738,35 @@ function buildUI(){
       }
     };
   });
+
+  /* При активном сценарии «Сброс» доступна только Перовская — остальные станции блокируются */
+  function updateStationAvailability(){
+    const isRelease = S.scenario === 'release';
+    document.querySelectorAll('.hppItem').forEach(el => {
+      const isPero = el.dataset.id === 'pero';
+      if (isRelease && !isPero){
+        el.classList.add('disabled');
+        el.style.opacity = '0.45';
+        el.style.pointerEvents = 'none';
+        el.title = 'Сценарий сброса активен только для Перовской МГЭС';
+      } else {
+        el.classList.remove('disabled');
+        el.style.opacity = '';
+        el.style.pointerEvents = '';
+        el.title = '';
+      }
+    });
+    /* Сценарии: при сбросе доступны только Норма, Сброс и Сброс настроек */
+    document.querySelectorAll('.scenBtn').forEach(b => {
+      if (isRelease && b.dataset.scen !== 'normal' && b.dataset.scen !== 'reset' && b.dataset.scen !== 'release'){
+        b.style.opacity = '0.45';
+        b.style.pointerEvents = 'none';
+      } else {
+        b.style.opacity = '';
+        b.style.pointerEvents = '';
+      }
+    });
+  }
 
   const baseOpts = {
     type:'line', maintainAspectRatio:false, animation:false,
@@ -1847,6 +1891,8 @@ function popupHTML(h, r, i, col, isBroken, overtop){
    ВЫБОР ГЭС
    ============================================================ */
 async function selectHPP(id, fromList){
+  /* При активном сценарии сброса переключение доступно только на Перовскую */
+  if (S.scenario === 'release' && id !== 'pero') return;
   S.selected = id;
   const h = HPPS.find(x => x.id === id);
   if (!h) return;
