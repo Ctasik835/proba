@@ -1581,7 +1581,11 @@ function stopDamBreak(){
    ВОДОХРАНИЛИЩЕ (с фолбэком-эллипсом)
    ============================================================ */
 function drawReservoir(h, i, lf, overtop){
-  if (S.reservoirs[h.id]){ layerRes.removeLayer(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
+  if (S.reservoirs[h.id]){
+    layerRes.removeLayer(S.reservoirs[h.id]);
+    if (S.reservoirs[h.id]._lbl) layerRes.removeLayer(S.reservoirs[h.id]._lbl);
+    delete S.reservoirs[h.id];
+  }
   const r = S.results[h.id];
   if (!r) return;
   /* Водохранилища рисуются только для Перовской и Андреевской ГЭС — остальные без контура */
@@ -1617,11 +1621,26 @@ function drawReservoir(h, i, lf, overtop){
     const gn = Array.isArray(g) ? g : (g.n || []);
     const rings = Array.isArray(g) ? g : ([g.d, g.n, g.f][vi] || gn);
     const group = L.layerGroup();
+    const smoothIt = h.id === 'pero' ? 0 : 1;
     rings.forEach(ring => {
-      polyAdd(group, smoothRing(ring, 1), { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
+      polyAdd(group, smoothRing(ring, smoothIt), { color: color, weight:2, opacity:0.95, fill: fill, fillOpacity: op });
     });
-    group.addTo(layerRes);
-    S.reservoirs[h.id] = group;
+    /* Подпись водохранилища над полигоном (только для Перовской) */
+    if (h.id === 'pero'){
+      const centerLat = rings[0].reduce((s,p)=>s+p[0],0)/rings[0].length;
+      const centerLon = rings[0].reduce((s,p)=>s+p[1],0)/rings[0].length;
+      const lbl = L.marker([centerLat, centerLon], {
+        icon: L.divIcon({
+          className:'res-label', html:'<div style="background:rgba(16,22,30,.85);color:#31c9ff;padding:2px 6px;border-radius:4px;border:1px solid #31c9ff;font-size:11px;font-weight:700;white-space:nowrap">Водохранилище Перовской МГЭС</div>',
+          iconAnchor:[0,0]
+        }), interactive:false
+      }).addTo(layerRes);
+      S.reservoirs[h.id] = group;
+      S.reservoirs[h.id]._lbl = lbl;
+    } else {
+      group.addTo(layerRes);
+      S.reservoirs[h.id] = group;
+    }
     return;
   }
 
