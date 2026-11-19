@@ -1102,6 +1102,7 @@ function getWaveParams(h){
   }
   base.maxDist  = Math.round(base.maxDist  * WAVE_SCALE);
   base.maxWidth = Math.round(base.maxWidth * WAVE_SCALE);
+  if (a < 150) base.maxWidth = Math.min(base.maxWidth, 900);   // малые ГЭС: волна не шире ~900 м
   return base;
 }
 
@@ -1173,6 +1174,24 @@ function chaikinSmooth(course, iterations=1){
   }
   return pts;
 }
+function smoothRing(ring, iterations=1){
+  if (!ring || ring.length < 4) return ring;
+  const closed = ring[0][0]===ring[ring.length-1][0] && ring[0][1]===ring[ring.length-1][1];
+  const base = closed ? ring.slice(0,-1) : ring;
+  let out = base;
+  for (let it=0; it<iterations; it++){
+    const n = out.length;
+    const res = [];
+    for (let i=0;i<n;i++){
+      const p0=out[i], p1=out[(i+1)%n], pm=out[(i-1+n)%n];
+      res.push([0.5*pm[0]+0.5*p0[0], 0.5*pm[1]+0.5*p0[1]]);
+      res.push([0.5*p0[0]+0.5*p1[0], 0.5*p0[1]+0.5*p1[1]]);
+    }
+    out = res;
+  }
+  if (closed) out.push(out[0]);
+  return out;
+}
 
 function makeFloodWaveFromCourse(h, course, progress){
   /* progress 0..1. Фронт движется вдоль реки с ПОСТОЯННОЙ скоростью (без
@@ -1190,7 +1209,7 @@ function makeFloodWaveFromCourse(h, course, progress){
   if (frontLen < 250) return null;
   let trimmed = trimCourse(course, frontLen);
   if (trimmed.length < 2) return null;
-  trimmed = chaikinSmooth(trimmed, 2);
+  trimmed = chaikinSmooth(trimmed, 3);
   const n = trimmed.length;
   const W = params.maxWidth * ramp * (0.45 + 0.55 * decay);
   const widths = trimmed.map((_, i) => {
@@ -1377,7 +1396,7 @@ function simulateDamBreak(h, course, elev){
       let front = 0, hmax = 0;
       const wArr = new Float32Array(N+1);
       for (let k=0;k<=N;k++){
-        wArr[k] = Hd[k] > 0.05 ? Math.min(wCell[k] + 2*mSide*Hd[k], Math.max(wCell[k]*3.5, h.visMinW ? h.visMinW*4 : 500)) : 0;
+        wArr[k] = Hd[k] > 0.05 ? Math.min(wCell[k] + 2*mSide*Hd[k], Math.max(wCell[k]*3.5, h.visMinW ? h.visMinW : 40)) : 0;
         if (Hd[k] > 0.05){ front = k; if (Hd[k] > hmax) hmax = Hd[k]; }
         if (wArr[k] > maxW[k]) maxW[k] = wArr[k];
       }
@@ -1432,7 +1451,7 @@ async function startDamBreak(){
     while (maxK > 1 && sim.maxW[maxK] < 1) maxK--;
     maxK = Math.max(maxK, 2);
     const footPts = makeBandPolygon(
-      chaikinSmooth(sim.line.slice(0, maxK + 1), 1),
+      chaikinSmooth(sim.line.slice(0, maxK + 1), 2),
       Array.from(visWidths(sim.maxW.slice(0, maxK + 1), visFloor(h))), h.lat);
 
     /* перенос и зум на зону прорыва, чтобы волну было видно */
@@ -1477,7 +1496,7 @@ async function startDamBreak(){
       if (upto > 1){
         const lineTrim = sim.line.slice(0, upto + 1);
         const wTrim = Array.from(visWidths(fr.w.slice(0, upto + 1), visFloor(h)));
-        const pts = makeBandPolygon(chaikinSmooth(lineTrim, 1), wTrim, h.lat);
+        const pts = makeBandPolygon(chaikinSmooth(lineTrim, 2), wTrim, h.lat);
         const depth = Math.min(1, fr.hmax / 15);
         polyAdd(layerFlood, pts, {
           color:'#ff3b3b', weight:1.5, opacity:0.85,
@@ -1612,7 +1631,7 @@ function drawReservoir(h, i, lf, overtop){
     const rings = Array.isArray(g) ? g : ([g.d, g.n, g.f][vi] || gn);
     const group = L.layerGroup();
     rings.forEach(ring => {
-      polyAdd(group, ring, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
+      polyAdd(group, smoothRing(ring, 1), { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
     });
     group.addTo(layerRes);
     S.reservoirs[h.id] = group;
@@ -1626,7 +1645,7 @@ function drawReservoir(h, i, lf, overtop){
     const group = L.layerGroup();
     osmPolys.forEach(parts => {
       parts.forEach(pts => {
-        polyAdd(group, pts, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
+        polyAdd(group, smoothRing(pts, 1), { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
       });
     });
     group.addTo(layerRes);
