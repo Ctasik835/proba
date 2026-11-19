@@ -1617,9 +1617,9 @@ function drawReservoir(h, i, lf, overtop){
     const gn = Array.isArray(g) ? g : (g.n || []);
     const rings = Array.isArray(g) ? g : ([g.d, g.n, g.f][vi] || gn);
     const group = L.layerGroup();
-    /* Обе станции без сглаживания — контур по OSM как на карте */
+    /* Контуры по OSM рисуются как есть (без сглаживания), polyAdd сам замыкает кольцо */
     rings.forEach(ring => {
-      polyAdd(group, smoothRing(ring, 0), { color: color, weight:2, opacity:0.95, fill: fill, fillOpacity: op });
+      polyAdd(group, ring, { color: color, weight:2, opacity:0.95, fill: fill, fillOpacity: op });
     });
     group.addTo(layerRes);
     S.reservoirs[h.id] = group;
@@ -1633,7 +1633,7 @@ function drawReservoir(h, i, lf, overtop){
     const group = L.layerGroup();
     osmPolys.forEach(parts => {
       parts.forEach(pts => {
-        polyAdd(group, smoothRing(pts, 1), { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
+        polyAdd(group, pts, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
       });
     });
     group.addTo(layerRes);
