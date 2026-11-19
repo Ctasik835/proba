@@ -1,4 +1,4 @@
-const CACHE = 'ges-shell-v20';
+const CACHE = 'ges-shell-v22';
 const SHELL = [
   './',
   './index.html',
