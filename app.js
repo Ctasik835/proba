@@ -135,7 +135,8 @@ const S = {
   mode:'history', scenario:'normal',
   dates:[], results:{}, cache:{}, sources:{},
   markers:{}, reservoirs:{},
-  idx:0, playing:false, selected:null, chart:null,
+  idx:0, playing:false, selected:null,
+  chartPower:null, chartLevel:null,
   lastChartUpdate:0, loading:false, damBreak:null,
   riverCourses:{}, reservoirsOSM:{},
   loadingRiver:{}, loadingRes:{}, loadingStation:{}
@@ -617,7 +618,7 @@ function releaseDetailsHTML(h){
 }
 
 function updateChartRelease(res){
-  if (!S.chart) return;
+  if (!S.chartPower) return;
   const R = res.tau.length;
   const step = 10;                       // каждые 5 мин
   const labels = [], colors = ['#31c9ff','#3ddc84','#ffb02e','#ff8a3d','#ff5a5a','#ff3b3b'];
@@ -632,9 +633,15 @@ function updateChartRelease(res){
     ds.push({ label: `Q${j+1} (${RELEASE.points[j+1][0]} м), м³/с`, data,
       borderColor: colors[j], borderWidth: j === R-1 ? 2.2 : 1.2, tension: .25, fill: false, pointRadius: 0 });
   }
-  S.chart.data.labels = labels;
-  S.chart.data.datasets = ds;
-  S.chart.update('none');
+  const cp = S.chartPower;
+  cp.data.labels = labels;
+  cp.data.datasets = ds;
+  cp.options.scales.y.title.text = 'Расход, м³/с';
+  cp.options.plugins.tooltip.callbacks = { label: ctx => ctx.parsed.y.toFixed(4)+' м³/с' };
+  cp.update('none');
+  S.chartLevel.data.labels = [];
+  S.chartLevel.data.datasets = [];
+  S.chartLevel.update('none');
 }
 
 /* ============================================================
@@ -1713,26 +1720,39 @@ function buildUI(){
     };
   });
 
-  const ctx = $('chart').getContext('2d');
-  S.chart = new Chart(ctx, {
-    type:'line',
-    data:{ labels:[], datasets:[] },
-    options:{
-      responsive:true, maintainAspectRatio:false, animation:false,
-      interaction:{ mode:'index', intersect:false },
-      elements:{ point:{ radius:0 } },
-      plugins:{
-        legend:{ labels:{ color:'#8ba0b6', boxWidth:10, font:{size:10} } },
-        tooltip:{ backgroundColor:'rgba(16,22,30,.95)', borderColor:'#2a3644', borderWidth:1,
-          titleColor:'#dbe6f2', bodyColor:'#dbe6f2', padding:8 }
-      },
-      scales:{
-        x:{ ticks:{ color:'#6d8199', maxTicksLimit:7, font:{size:9} }, grid:{ color:'rgba(255,255,255,.05)' } },
-        y:{ position:'left', ticks:{ color:'#31c9ff', font:{size:9} }, grid:{ color:'rgba(255,255,255,.05)' } },
-        y1:{ position:'right', ticks:{ color:'#ffb02e', font:{size:9} }, grid:{ drawOnChartArea:false } }
+  const baseOpts = {
+    type:'line', maintainAspectRatio:false, animation:false,
+    interaction:{ mode:'index', intersect:false },
+    elements:{ point:{ radius:0 } },
+    plugins:{
+      legend:{ display:false },
+      tooltip:{
+        backgroundColor:'rgba(16,22,30,.95)', borderColor:'#2a3644', borderWidth:1,
+        titleColor:'#dbe6f2', bodyColor:'#dbe6f2', padding:8, font:{size:11}
       }
+    },
+    scales:{
+      x:{ display:false, ticks:{ color:'#6d8199', maxTicksLimit:6, font:{size:8} }, grid:{ color:'rgba(255,255,255,.04)' } },
+      y:{ position:'left', ticks:{ color:'#dbe6f2', font:{size:9} }, grid:{ color:'rgba(255,255,255,.05)' },
+        title:{ display:true, color:'#8ba0b6', font:{size:10} } }
     }
-  });
+  };
+  const cp = $('chartPowerC').getContext('2d');
+  S.chartPower = new Chart(cp, Object.assign({}, baseOpts, {
+    data:{ labels:[], datasets:[] },
+    options: Object.assign({}, baseOpts, { plugins: Object.assign({}, baseOpts.plugins, { tooltip:{ enabled:false } }),
+      scales: Object.assign({}, baseOpts.scales, { y: Object.assign({}, baseOpts.scales.y, { title:{ display:true, text:'Мощность' } }) }) })
+  }));
+  const cl = $('chartLevelC').getContext('2d');
+  S.chartLevel = new Chart(cl, Object.assign({}, baseOpts, {
+    data:{ labels:[], datasets:[] },
+    options: Object.assign({}, baseOpts, {
+      scales: Object.assign({}, baseOpts.scales, {
+        x: Object.assign({}, baseOpts.scales.x, { display:true }),
+        y: Object.assign({}, baseOpts.scales.y, { title:{ display:true, text:'Уровень ВБ, м' } })
+      })
+    })
+  }));
 
   document.querySelectorAll('#modeTabs button').forEach(btn => {
     btn.onclick = async () => {
@@ -1929,8 +1949,13 @@ function detailsHTML(h){
   </div>`;
 }
 
+function fmtAxisPower(v){
+  if (!v) return '0 кВт';
+  return v >= 1 ? v.toFixed(0)+' МВт' : (v*1000).toFixed(0)+' кВт';
+}
+
 function updateChart(){
-  if (!S.chart) return;
+  if (!S.chartPower || !S.chartLevel) return;
   if (S.scenario === 'release' && S.release){ return; }
   if (!S.selected) return;
   const now = performance.now();
@@ -1943,21 +1968,36 @@ function updateChart(){
 
   const i = S.idx, W = CHART_WINDOW;
   const a = Math.max(0, i-W), b = Math.min(S.dates.length, i+W);
-  const labels=[], pw=[], lv=[], qq=[];
+  const labels=[], pw=[], lv=[];
   for (let k=a;k<b;k++){
     labels.push(S.dates[k].slice(5));
-    pw.push(+r.power[k].toFixed(1));
+    pw.push(+r.power[k].toFixed(2));
     lv.push(+r.level[k].toFixed(2));
-    const c = S.cache[S.mode]?.[S.selected];
-    qq.push(c ? +(c.hydro.q[k]||0).toFixed(0) : 0);
   }
-  S.chart.data.labels = labels;
-  S.chart.data.datasets = [
-    { label:'Мощность, МВт', data:pw, borderColor:'#31c9ff', backgroundColor:'rgba(49,201,255,.12)', borderWidth:1.6, fill:true, yAxisID:'y', tension:.25 },
-    { label:'Уровень ВБ, м', data:lv, borderColor:'#ffb02e', borderWidth:1.4, yAxisID:'y1', tension:.25 },
-    { label:'Приток, м³/с', data:qq, borderColor:'#3ddc84', borderWidth:1, borderDash:[3,3], yAxisID:'y1', tension:.25, hidden:true }
-  ];
-  S.chart.update('none');
+
+  const cp = S.chartPower;
+  const cl = S.chartLevel;
+  cp.data.labels = labels;
+  cp.data.datasets = [{
+    data:pw, borderColor:'#31c9ff', backgroundColor:'rgba(49,201,255,.14)',
+    borderWidth:1.8, fill:true, tension:.28,
+  }];
+  cp.options.scales.y.title.text = h.notHPP ? 'Мощность — нет ГЭС' : 'Мощность';
+  cp.options.plugins.tooltip.callbacks = {
+    label: ctx => fmtAxisPower(ctx.parsed.y) + (h.notHPP?' (нет ГЭС)':'')
+  };
+  cp.update('none');
+
+  cl.data.labels = labels;
+  cl.data.datasets = [{
+    data:lv, borderColor:'#ffb02e', backgroundColor:'rgba(255,176,46,.12)',
+    borderWidth:1.8, fill:true, tension:.28,
+  }];
+  cl.options.scales.y.title.text = 'Уровень ВБ, м';
+  cl.options.plugins.tooltip.callbacks = {
+    label: ctx => ctx.parsed.y.toFixed(2)+' м'
+  };
+  cl.update('none');
 }
 
 /* ============================================================
