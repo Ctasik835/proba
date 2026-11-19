@@ -1954,6 +1954,22 @@ function fmtAxisPower(v){
   return v >= 1 ? v.toFixed(0)+' МВт' : (v*1000).toFixed(0)+' кВт';
 }
 
+/* Скользящее среднее — убирает резкие скачки на циклических графиках
+   климатического режима (заполнение-слив водохранилища по месяцам). */
+function movingAverage(data, win){
+  if (!win || win < 2) return data.slice();
+  const out = [];
+  const half = Math.floor(win/2);
+  for (let i=0;i<data.length;i++){
+    let s=0, c=0;
+    for (let j=Math.max(0,i-half); j<=Math.min(data.length-1,i+half); j++){
+      s += data[j]; c++;
+    }
+    out.push(s/c);
+  }
+  return out;
+}
+
 function updateChart(){
   if (!S.chartPower || !S.chartLevel) return;
   if (S.scenario === 'release' && S.release){ return; }
@@ -1977,10 +1993,13 @@ function updateChart(){
 
   const cp = S.chartPower;
   const cl = S.chartLevel;
+  /* Сглаживаем данные, чтобы график не скакал вертикально в режиме климата */
+  const pwS = movingAverage(pw, 5);
+  const lvS = movingAverage(lv, 5);
   cp.data.labels = labels;
   cp.data.datasets = [{
-    data:pw, borderColor:'#31c9ff', backgroundColor:'rgba(49,201,255,.14)',
-    borderWidth:1.8, fill:true, tension:.28,
+    data:pwS, borderColor:'#31c9ff', backgroundColor:'rgba(49,201,255,.06)',
+    borderWidth:1.6, fill:false, tension:.15,
   }];
   cp.options.scales.y.title.text = h.notHPP ? 'Мощность — нет ГЭС' : 'Мощность';
   cp.options.plugins.tooltip.callbacks = {
@@ -1990,8 +2009,8 @@ function updateChart(){
 
   cl.data.labels = labels;
   cl.data.datasets = [{
-    data:lv, borderColor:'#ffb02e', backgroundColor:'rgba(255,176,46,.12)',
-    borderWidth:1.8, fill:true, tension:.28,
+    data:lvS, borderColor:'#ffb02e', backgroundColor:'rgba(255,176,46,.06)',
+    borderWidth:1.6, fill:false, tension:.15,
   }];
   cl.options.scales.y.title.text = 'Уровень ВБ, м';
   cl.options.plugins.tooltip.callbacks = {
