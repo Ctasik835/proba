@@ -12,12 +12,6 @@ const HPPS = [
    reservoirName:'пруд Кравцовской МГЭС', damH:3, breachW:29, chanW0:8, chanW1:45,
    damType:'IV класс, гребень 29×1 м, напор 2,5 м (82 года эксплуатации)',
    note:'с 2025 г. идёт демонтаж старой плотины'},
-  {id:'yash', name:'Яшинская МГЭС (Вахвиала)', river:'Бусловка', lat:60.8031, lon:28.4953, flowDir:250,
-   capacityMW:1.2, powerLabel:'до 1,2 МВт', head:6, nmu:16, umo:14, areaNMU:0.03,
-   totalVolume:0.00009, usefulVolume:0.00003, eff:.85, year:1896, visMinW:35, terrainAmpl:50,
-   reservoirName:'пруд Яшинской МГЭС', damH:2, breachW:18.3, chanW0:10, chanW1:50,
-   damType:'водослив с широким порогом, 3 пролёта, высота 2 м',
-   note:'апрель 2025: объявлен тендер на снос ГТС'},
   {id:'andr', name:'Андреевская ГЭС', river:'Андреевка (Тукалус-Йоки)', lat:60.71815, lon:28.1786, flowDir:170,
    capacityMW:0.6, powerLabel:'0,6 МВт', head:7, nmu:99, umo:96.5, areaNMU:0.045,
    totalVolume:0.00012, usefulVolume:0.00004, eff:.85, year:1950, visMinW:30, terrainAmpl:50,
@@ -49,10 +43,11 @@ const HPPS = [
    damType:'плотина 1948 г. (строители — студенты ЛПИ им. Калинина)',
    note:''}
 ];
-const PRIORITY = ['krav','yash','andr','pero','igla','rokk','alak'];
+const PRIORITY = ['krav','andr','pero','igla','rokk','alak'];
 const HISTORY_START = '2023-01-01';
 const CHART_WINDOW = 60;
 const CHART_THROTTLE_MS = 80;
+const SHOW_DECORATIVE_WAVE = false;   // декоративная волна (широкий коридор) отключена — только физическая модель Сен-Венана
 
 /* ============================================================
    НАСТРОЙКИ ВОЛНЫ
@@ -1102,7 +1097,7 @@ function getWaveParams(h){
   }
   base.maxDist  = Math.round(base.maxDist  * WAVE_SCALE);
   base.maxWidth = Math.round(base.maxWidth * WAVE_SCALE);
-  if (a < 150) base.maxWidth = Math.min(base.maxWidth, 900);   // малые ГЭС: волна не шире ~900 м
+  if (a < 150) base.maxWidth = Math.min(base.maxWidth, 260);   // малые ГЭС: волна не шире ~260 м
   return base;
 }
 
@@ -1126,7 +1121,9 @@ function makeBandPolygon(centerline, widths, latRef){
       (centerline[i][1]-centerline[i-1][1])/degLon);
   }
   const segAvg = Math.max(10, segSum/Math.max(1, n-1));
-  const winPts = Math.max(3, Math.round((maxW * 0.55) / segAvg));
+  /* локальная ширина — медиана по сегменту, окно сглаживания ≈ 45% от неё */
+  const locW = widths[Math.floor(n/2)] || maxW;
+  const winPts = Math.max(3, Math.round((locW * 0.45) / segAvg));
 
   const sm = new Array(n);
   const halfW2 = Math.floor(winPts/2);
@@ -1211,7 +1208,7 @@ function makeFloodWaveFromCourse(h, course, progress){
   if (trimmed.length < 2) return null;
   trimmed = chaikinSmooth(trimmed, 3);
   const n = trimmed.length;
-  const W = params.maxWidth * ramp * (0.45 + 0.55 * decay);
+  const W = Math.min(params.maxWidth, 300) * ramp * (0.45 + 0.55 * decay);
   const widths = trimmed.map((_, i) => {
     const s = n > 1 ? i/(n-1) : 0;             // 0 — плотина, 1 — фронт
     const taper = 1 - 0.6 * Math.pow(s, 0.85); // затухание к переднему краю
@@ -1544,7 +1541,7 @@ async function startDamBreak(){
   }, 400);
   const duration = Math.max(12, params.baseDuration * 1.25);
   S.damBreak = { id:h.id, progress:0, start:performance.now(), duration, course };
-  $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${(courseLength(course)/1000).toFixed(0)} км вниз по течению`;
+  $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${(courseLength(course)/1000).toFixed(0)} км вниз по течению` + (SHOW_DECORATIVE_WAVE?'':' · волна не отрисовывается');
   $('alertBanner').classList.add('show');
 
   recompute(); render();
@@ -1555,23 +1552,7 @@ async function startDamBreak(){
     const elapsed = (t - S.damBreak.start)/1000;
     S.damBreak.progress = Math.min(1, elapsed / S.damBreak.duration);
     clear(layerFlood);
-
-    const wave = makeFloodWaveFromCourse(h, course, S.damBreak.progress);
-    if (wave){
-      const fade = wave.decay;
-      polyAdd(layerFlood, wave.pts, {
-        color:'#ff3b3b', weight:1.5, opacity:0.8*fade + 0.1,
-        fill:'#ff5a5a', fillOpacity:0.30*fade
-      });
-      if (wave.decay > 0.05){
-        try {
-          L.circleMarker(wave.front, {
-            radius: 4 + 4*wave.decay, color:'#ff1a1a', weight:2.5, opacity:0.95*fade,
-            fillColor:'#ff5a5a', fillOpacity:0.9*fade, interactive:false
-          }).addTo(layerFlood);
-        } catch(e){ console.warn('front:', e.message); }
-      }
-    }
+    /* декоративная волна отключена (SHOW_DECORATIVE_WAVE = false) — не рисуем полигон */
     render();
     if (S.damBreak.progress < 1) requestAnimationFrame(step);
     else setTimeout(() => {
