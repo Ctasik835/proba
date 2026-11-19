@@ -109,7 +109,11 @@ function panToStation(h, zoom){
   const z = Math.max(map.getZoom(), zoom || 7);
   const pt = map.project([h.lat, h.lon], z);
   const sz = map.getSize();
-  const center = map.unproject(pt.subtract([(0.62 - 0.5) * sz.x, 0]), z);
+  /* Центрируем станцию в рабочей зоне карты между левой панелью (~260 px)
+     и правой панелью деталей/графиков (~450 px), чтобы не попадать под них. */
+  const leftPanel = 260, rightPanel = $('chartPanel').classList.contains('show') ? 450 : 120;
+  const cx = leftPanel + (sz.x - leftPanel - rightPanel) / 2;
+  const center = map.unproject(pt.subtract([cx - sz.x / 2, 0]), z);
   map.flyTo(center, z, { duration: 0.7 });
 }
 
