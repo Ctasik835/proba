@@ -47,7 +47,7 @@ const PRIORITY = ['krav','andr','pero','igla','rokk','alak'];
 const HISTORY_START = '2023-01-01';
 const CHART_WINDOW = 60;
 const CHART_THROTTLE_MS = 80;
-const SHOW_DECORATIVE_WAVE = false;   // декоративная волна (широкий коридор) отключена — только физическая модель Сен-Венана
+const SHOW_DECORATIVE_WAVE = false;   // декоративная волна (широкий коридор) отключена
 
 /* ============================================================
    НАСТРОЙКИ ВОЛНЫ
@@ -1245,7 +1245,7 @@ function makeFloodFootprint(h, course){
 
 /* ============================================================
    ФИЗИЧЕСКАЯ МОДЕЛЬ ПРОРЫВА ПЛОТИНЫ (1D)
-   Уравнения мелкой воды (Сен-Венана) вдоль реального русла:
+   Уравнения мелкой воды вдоль реального русла:
      ∂A/∂t + ∂Q/∂x = 0
      ∂Q/∂t + ∂(Q²/A + gA²/2B̄)/∂x = −gA·dz/∂x − g·n²·Q|Q|·A/(A·R^{4/3})
    Канал — трапеция (B(s) по дну, откос m=1:18), шероховатость Мэннинга
@@ -1438,10 +1438,10 @@ async function startDamBreak(){
   clear(layerFlood);
   clear(layerFloodZone);
 
-  /* ========= ФИЗИЧЕСКИЙ РЕЖИМ: уравнения Сен-Венана по реальному профилю ======== */
+  /* ========= ФИЗИЧЕСКИЙ РЕЖИМ: расчёт прорыва по реальному профилю ======== */
   const elev = (typeof RIVER_ELEV !== 'undefined') ? RIVER_ELEV[h.id] : null;
   if (elev && elev.length >= 10){
-    showStatusMsg('Расчёт прорыва: Сен-Венан 1D по профилю DEM…');
+    showStatusMsg('Расчёт прорыва по профилю DEM…');
     await sleep(30);
     const sim = simulateDamBreak(h, course, elev);
     if (!sim.frames.length){ showStatusMsg('Модель не дала волны'); return; }
@@ -1511,7 +1511,7 @@ async function startDamBreak(){
         } catch(e){ console.warn('front circle:', e.message); }
       }
       $('alertBanner').innerHTML =
-        `💥 ПРОРЫВ · Сен-Венан 1D · t+${fmtT(fr.t)} · фронт ${(fr.front*sim.ds/1000).toFixed(1)} км` +
+        `💥 ПРОРЫВ · t+${fmtT(fr.t)} · фронт ${(fr.front*sim.ds/1000).toFixed(1)} км` +
         ` · глубина до ${fr.hmax.toFixed(1)} м · Q прорана ${fr.qsrc.toFixed(0)} м³/с` +
         (fr.pool > 0.05 ? ` · вдхр −${(sim.H0eff - fr.pool).toFixed(1)} м` : ' · вдхр пусто');
       render();
@@ -1947,7 +1947,7 @@ function detailsHTML(h){
     <div>${wp.description}</div>
     <div style="color:#8ba0b6;margin-top:4px">скорость ≈ ${wp.speedMs} м/с · ширина до ${(wp.maxWidth/1000).toFixed(1)} км</div>
     ${(typeof RIVER_ELEV !== 'undefined' && RIVER_ELEV[h.id]) ?
-      `<div style="color:#39d353;margin-top:4px">∿ расчёт: Сен-Венан 1D, профиль дна DEM, водосливная кривая прорана, n=0.035</div>` : ''}
+      `<div style="color:#39d353;margin-top:4px">∿ расчёт: профиль дна DEM, водосливная кривая прорана, n=0.035</div>` : ''}
     <div style="color:#8ba0b6;margin-top:2px;font-size:10px">${courseInfo}</div>
     <div style="color:#8ba0b6;font-size:10px">${resInfo}</div>
   </div>`;
