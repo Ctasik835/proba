@@ -1584,6 +1584,8 @@ function drawReservoir(h, i, lf, overtop){
   if (S.reservoirs[h.id]){ layerRes.removeLayer(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
   const r = S.results[h.id];
   if (!r) return;
+  /* Водохранилища рисуются только для Перовской и Андреевской ГЭС — остальные без контура */
+  if (h.id !== 'pero' && h.id !== 'andr') return;
 
   let color, fill, op;
   if (overtop){ color='#ff3b3b'; fill='#ff5252'; op=0.5; }
@@ -1928,6 +1930,7 @@ async function selectHPP(id, fromList){
     recompute(); render();
   }
 
+  /* Русло загружается для всех станций (нужно для прорыва), водохранилища — только для Перовской и Андреевской */
   if (!S.riverCourses[h.id] && !S.loadingRiver[h.id]){
     S.loadingRiver[h.id] = loadRiverCourse(h).then(c => {
       S.riverCourses[h.id] = c; delete S.loadingRiver[h.id];
@@ -1935,13 +1938,15 @@ async function selectHPP(id, fromList){
       return c;
     }).catch(() => { delete S.loadingRiver[h.id]; });
   }
-  const embeddedRes = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
-  if (!embeddedRes && !S.reservoirsOSM[h.id] && !S.loadingRes[h.id]){
-    S.loadingRes[h.id] = loadReservoirOSM(h).then(p => {
-      S.reservoirsOSM[h.id] = p; delete S.loadingRes[h.id];
-      if (S.selected === h.id) render();
-      return p;
-    }).catch(() => { S.reservoirsOSM[h.id] = []; delete S.loadingRes[h.id]; });
+  if (h.id === 'pero' || h.id === 'andr'){
+    const embeddedRes = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
+    if (!embeddedRes && !S.reservoirsOSM[h.id] && !S.loadingRes[h.id]){
+      S.loadingRes[h.id] = loadReservoirOSM(h).then(p => {
+        S.reservoirsOSM[h.id] = p; delete S.loadingRes[h.id];
+        if (S.selected === h.id) render();
+        return p;
+      }).catch(() => { S.reservoirsOSM[h.id] = []; delete S.loadingRes[h.id]; });
+    }
   }
 
   if (S.scenario === 'dam_break') startDamBreak();
