@@ -467,6 +467,176 @@ out geom;`;
   return course;
 }
 
+
+/* ============================================================
+   УЧЕБНЫЙ СЦЕНАРИЙ «ДОПОЛНИТЕЛЬНЫЙ СБРОС» — Перовская МГЭС
+   Точная реализация алгоритма пользователя
+   (Перовка_финальный_алгоритм.js / Перовка_ИТОГ_расчёт_и_пояснения.xlsx):
+   каскад линейных резервуаров, треугольный гидрограф, dt=30 с, горизонт 12 ч.
+   Зона затопления НЕ рассчитывается (по ограничениям исходной модели).
+   ============================================================ */
+const RELEASE = {
+  station: 'pero',
+  cfg: { area_m2: 15510, mean_drawdown_m: 0.10, background_m3s: 1.79,
+         duration_s: 3600, peak_time_s: 1200, dt_s: 30, speed_parameter_ms: 1,
+         horizon_s: 43200 },
+  points: [
+    [0,60.679924,28.950886], [503,60.682763,28.954423],
+    [1000,60.686019,28.955504], [1500,60.689338,28.951666],
+    [2000,60.692894,28.948601], [2500,60.696733,28.946009],
+    [3000,60.699537,28.939458]
+  ]
+};
+
+/* Алгоритм — копия calculate() из файла пользователя */
+function releaseCalculate(p, pts){
+  const volume = p.area_m2 * p.mean_drawdown_m;
+  const peak = 2 * volume / p.duration_s;
+  const tau = pts.slice(1).map((v, j) => (v[0] - pts[j][0]) / p.speed_parameter_ms);
+  const storage = tau.map(() => 0);
+  const src = t => t <= p.peak_time_s ? peak * t / p.peak_time_s :
+    (t <= p.duration_s ? peak * (p.duration_s - t) / (p.duration_s - p.peak_time_s) : 0);
+  const steps = Math.round(p.horizon_s / p.dt_s);
+  const out = new Float64Array((steps + 1) * tau.length);
+  for (let n = 0; n <= steps; n++){
+    const t = n * p.dt_s;
+    let current = src(t);
+    for (let j = 0; j < tau.length; j++){
+      if (n > 0){
+        storage[j] = (storage[j] + current * p.dt_s) / (1 + p.dt_s / tau[j]);
+        current = storage[j] / tau[j];
+      } else current = 0;
+      out[n * tau.length + j] = current;
+    }
+  }
+  return { out, tau, steps, volume, peak, bg: p.background_m3s, dt: p.dt_s, horizon: p.horizon_s };
+}
+
+function fmtClock(sec){
+  const hh = Math.floor(sec / 3600), mm = Math.floor(sec % 3600 / 60);
+  return (hh ? hh + 'ч ' : '') + mm + 'м';
+}
+
+async function startRelease(){
+  const p = RELEASE;
+  if (S.selected !== p.station){
+    showStatusMsg('Сценарий «Сброс» построен для Перовской МГЭС — переключаю на неё');
+    await selectHPP(p.station, true);
+  }
+  stopDamBreak();
+  const h = HPPS.find(x => x.id === p.station);
+  const res = releaseCalculate(p.cfg, p.points);
+  S.release = { res, start: performance.now(), dur: 30 * 1000 };  // 12 ч → 30 с
+  clear(layerFlood); clear(layerFloodZone);
+
+  /* русло участка (плотина → 3 км) */
+  const line = p.points.map(pt => [pt[1], pt[2]]);
+  L.polyline(line, { color:'#31c9ff', weight:3, opacity:0.9, interactive:false }).addTo(layerFloodZone);
+  p.reachMarkers = p.points.slice(1).map((pt, j) => {
+    const mk = L.circleMarker([pt[1], pt[2]], {
+      radius: 7, color:'#ffffff', weight:2, fillColor:'#1a4a6b', fillOpacity:0.95
+    }).addTo(layerFlood);
+    mk.bindTooltip('', { permanent:true, direction:'top', offset:[0,-8], className:'qtip' });
+    return mk;
+  });
+
+  /* зум на участок */
+  const la = line.map(q => q[0]), lo = line.map(q => q[1]);
+  map.flyToBounds([[Math.min(...la), Math.min(...lo)], [Math.max(...la), Math.max(...lo)]],
+    { paddingTopLeft: [380, 90], paddingBottomRight: [460, 120], duration: 0.8 });
+
+  /* паспорт сценария у плотины */
+  setTimeout(() => {
+    L.popup({ maxWidth: 280, autoPan: false, closeButton: true, className: 'breakPop' })
+      .setLatLng([h.lat, h.lon])
+      .setContent(`<b style="color:#31c9ff">📤 ДОПОЛНИТЕЛЬНЫЙ СБРОС — учебный сценарий</b><br>
+        Объём источника: <b>${res.volume.toFixed(0)} м³</b> (площадь 15 510 м² × снижение 0,10 м)<br>
+        Пик источника: <b>${res.peak.toFixed(3)} м³/с</b> при t=20 мин · T=60 мин<br>
+        Фоновый расход Q₀: <b>1,79 м³/с</b> (медиана поста 72007, 2008–2012)<br>
+        Трансформация: 6 участков × ~500 м, каскад линейных резервуаров, c=1 м/с<br>
+        <span style="color:#ffb02e;font-size:10px">Расходы рассчитаны каскадной линейной моделью (учебно).
+        Зона затопления не рассчитывалась.</span>`)
+      .openOn(map);
+  }, 1000);
+
+  $('alertBanner').classList.add('show');
+  $('details').innerHTML = releaseDetailsHTML(h);
+  updateChartRelease(res);
+  requestAnimationFrame(releaseStep);
+}
+
+function releaseStep(tNow){
+  if (!S.release) return;
+  const p = RELEASE, { res } = S.release;
+  const tSim = Math.min(res.horizon, (tNow - S.release.start) / 1000 * (res.horizon / (S.release.dur / 1000)));
+  const n = Math.min(res.steps, Math.round(tSim / res.dt));
+  const R = res.tau.length;
+  let frontJ = -1;
+  for (let j = 0; j < R; j++){
+    const extra = res.out[n * R + j];
+    const tot = res.bg + extra;
+    const rel = Math.min(1, extra / res.peak);
+    const mk = p.reachMarkers[j];
+    mk.setStyle({ fillColor: rel > 0.5 ? '#ff3b3b' : rel > 0.2 ? '#ff8a3d' : rel > 0.02 ? '#ffb02e' : '#1a4a6b' });
+    mk.setTooltipContent(`участок ${j+1} · ${p.points[j+1][0]} м<br><b>${tot.toFixed(3)} м³/с</b>` +
+      (extra > 0.001 ? ` <span style="color:#ffb02e">(+${extra.toFixed(3)})</span>` : ''));
+    if (extra > 0.005) frontJ = j;
+  }
+  const q6 = res.bg + res.out[n * R + R - 1];
+  $('alertBanner').innerHTML =
+    `📤 УЧЕБНЫЙ СБРОС · Перовская · t+${fmtClock(n * res.dt)} · Q₆ (3 км) = <b>${q6.toFixed(3)} м³/с</b>` +
+    (frontJ >= 0 ? ` · волна дошла до участка ${frontJ + 1}` : ' · волна у источника');
+  if (n < res.steps) requestAnimationFrame(releaseStep);
+  else $('alertBanner').innerHTML += ' · <b>сценарий завершён (12 ч)</b>';
+}
+
+function stopRelease(){
+  S.release = null;
+  clear(layerFlood); clear(layerFloodZone);
+  $('alertBanner').classList.remove('show');
+  if (RELEASE.reachMarkers) RELEASE.reachMarkers = null;
+}
+
+function releaseDetailsHTML(h){
+  return `<h3>${h.name}</h3>
+  <div style="font-size:11px;margin-bottom:6px;color:#31c9ff">📤 Учебный сценарий дополнительного сброса</div>
+  <div class="kv"><span>Модель</span><span>каскад линейных резервуаров</span></div>
+  <div class="kv"><span>Источник</span><span>треугольный гидрограф</span></div>
+  <div class="kv"><span>Объём V_b</span><span>1 551 м³</span></div>
+  <div class="kv"><span>Пик q_b,max</span><span>0,862 м³/с (t=20 мин)</span></div>
+  <div class="kv"><span>Фон Q₀</span><span>1,79 м³/с</span></div>
+  <div class="kv"><span>Шаг / горизонт</span><span>30 с / 12 ч</span></div>
+  <div class="kv"><span>Участки</span><span>6 × ~500 м, до 3 км</span></div>
+  <div class="kv"><span>Сценарий</span><span style="font-size:10px">area15510_drawdown010</span></div>
+  <div style="margin-top:8px;padding:8px 10px;background:rgba(49,201,255,.08);border:1px solid rgba(49,201,255,.25);border-radius:8px;font-size:11px;line-height:1.5">
+    Реализовано строго по «Перовка_ИТОГ_расчёт_и_пояснения.xlsx»:
+    Sᵢⁿ⁺¹ = (Sᵢⁿ + IᵢΔt)/(1+Δt/τᵢ), Oᵢ = Sᵢ/τᵢ, τᵢ=Lᵢ/c.
+    Подписи у точек маршрута показывают полный расход Qᵢ=Q₀+Oᵢ.
+    <div style="color:#ffb02e;margin-top:4px">Не инженерный прогноз прорыва; зона затопления не строилась.</div>
+  </div>`;
+}
+
+function updateChartRelease(res){
+  if (!S.chart) return;
+  const R = res.tau.length;
+  const step = 10;                       // каждые 5 мин
+  const labels = [], colors = ['#31c9ff','#3ddc84','#ffb02e','#ff8a3d','#ff5a5a','#ff3b3b'];
+  const ds = [];
+  for (let n = 0; n <= res.steps; n += step){
+    const t = n * res.dt;
+    labels.push(Math.floor(t/60) + 'м');
+  }
+  for (let j = 0; j < R; j++){
+    const data = [];
+    for (let n = 0; n <= res.steps; n += step) data.push(+(res.bg + res.out[n * R + j]).toFixed(4));
+    ds.push({ label: `Q${j+1} (${RELEASE.points[j+1][0]} м), м³/с`, data,
+      borderColor: colors[j], borderWidth: j === R-1 ? 2.2 : 1.2, tension: .25, fill: false, pointRadius: 0 });
+  }
+  S.chart.data.labels = labels;
+  S.chart.data.datasets = ds;
+  S.chart.update('none');
+}
+
 /* ============================================================
    ВОДОХРАНИЛИЩЕ
    ============================================================ */
@@ -1528,9 +1698,10 @@ function buildUI(){
       const sc = btn.dataset.scen;
       document.querySelectorAll('.scenBtn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      if (sc === 'dam_break'){ S.scenario = 'dam_break'; startDamBreak(); }
+      if (sc === 'dam_break'){ stopRelease(); S.scenario = 'dam_break'; startDamBreak(); }
+      else if (sc === 'release'){ stopDamBreak(); S.scenario = 'release'; startRelease(); }
       else {
-        stopDamBreak();
+        stopDamBreak(); stopRelease();
         S.scenario = sc;
         recompute(); render();
         if (S.selected){
@@ -1569,7 +1740,7 @@ function buildUI(){
       document.querySelectorAll('#modeTabs button').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       S.mode = btn.dataset.mode;
-      stopDamBreak();
+      stopDamBreak(); stopRelease();
       S.scenario = 'normal';
       document.querySelectorAll('.scenBtn').forEach(b => b.classList.toggle('active', b.dataset.scen === 'normal'));
       await loadPeriod(S.mode);
@@ -1665,7 +1836,9 @@ async function selectHPP(id, fromList){
   if (map){
     if (fromList) panToStation(h);
     /* попап — после панорамы (Leaflet попапы зум не закрывает, так рисуется чище) */
-    setTimeout(() => { const m = S.markers[id]; if (m) m.openPopup(); }, fromList ? 800 : 0);
+    if (S.scenario !== 'release'){
+      setTimeout(() => { const m = S.markers[id]; if (m) m.openPopup(); }, fromList ? 800 : 0);
+    }
   }
 
   if (!S.cache[S.mode]?.[id] && !S.loadingStation[id] && apiAvailable !== false){
@@ -1757,7 +1930,9 @@ function detailsHTML(h){
 }
 
 function updateChart(){
-  if (!S.selected || !S.chart) return;
+  if (!S.chart) return;
+  if (S.scenario === 'release' && S.release){ return; }
+  if (!S.selected) return;
   const now = performance.now();
   if (now - S.lastChartUpdate < CHART_THROTTLE_MS) return;
   S.lastChartUpdate = now;

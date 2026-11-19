@@ -32,6 +32,7 @@
     <button class="scenBtn" data-scen="flood">🌊 Паводок</button>
     <button class="scenBtn" data-scen="drought">☀️ Засуха</button>
     <button class="scenBtn danger" data-scen="dam_break">💥 Прорыв</button>
+    <button class="scenBtn" data-scen="release" title="Каскадная модель дополнительного сброса (ваш xlsx) — только Перовская">📤 Сброс</button>
   </div>
   <header style="border-top:1px solid var(--line)">ГЭС <span id="hppCount"></span></header>
   <div id="hppList"></div>
@@ -73,7 +74,7 @@ if ('serviceWorker' in navigator){
   });
 }
 </script>
-<div id="buildStamp">сборка <b>v19 · узкая волна</b></div>
+<div id="buildStamp">сборка <b>v20 · сброс</b></div>
 <script src="rivers-data.js"></script>
 <script src="reservoirs-data.js"></script>
 <script src="terrain-data.js"></script>
