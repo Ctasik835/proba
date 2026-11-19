@@ -2005,6 +2005,10 @@ function updateChart(){
   cp.options.plugins.tooltip.callbacks = {
     label: ctx => fmtAxisPower(ctx.parsed.y) + (h.notHPP?' (нет ГЭС)':'')
   };
+  /* Фиксированный вертикальный масштаб мощности — линия не касется краёв графика */
+  const pMax = Math.max(h.capacityMW || 0, ...pw) * 1.15;
+  cp.options.scales.y.min = 0;
+  cp.options.scales.y.max = pMax > 0 ? pMax : 1;
   cp.update('none');
 
   cl.data.labels = labels;
@@ -2013,6 +2017,11 @@ function updateChart(){
     borderWidth:1.6, fill:false, tension:.15,
   }];
   cl.options.scales.y.title.text = 'Уровень ВБ, м';
+  /* Фиксированный вертикальный масштаб уровня: umo..nmu с отступом ±0.5 м */
+  const lMin = (h.umo != null ? h.umo : Math.min(...lvS)) - 0.5;
+  const lMax = (h.nmu != null ? h.nmu : Math.max(...lvS)) + 0.5;
+  cl.options.scales.y.min = lMin;
+  cl.options.scales.y.max = lMax;
   cl.options.plugins.tooltip.callbacks = {
     label: ctx => ctx.parsed.y.toFixed(2)+' м'
   };
