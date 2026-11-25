@@ -1,0 +1,52 @@
+Лицензии разделены: код сайта и данные.
+
+======================================================================
+1. КОД (app.js, model.js, version.js, sw.js, style.css, index.html,
+   tests/, tools/, manifest.webmanifest, icons/icon.svg)
+======================================================================
+
+MIT License
+
+Copyright (c) 2026 Ctasik835
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+(Канонический текст: https://opensource.org/license/mit)
+
+======================================================================
+2. ДАННЫЕ, НЕ ЯВЛЯЮЩИЕСЯ СОБСТВЕННО КОДОМ
+======================================================================
+
+- Контуры водохранилищ и русел (`reservoirs-data.js`, `rivers-data.js`) —
+  производные работы OpenStreetMap, © OpenStreetMap contributors, лицензия
+  ODbL (https://opendatacommons.org/licenses/odbl/). При использовании
+  этих данных вне этого репозитория требуется атрибуция
+  «© OpenStreetMap contributors (ODbL)» — она выведена в control
+  `attribution` на карте.
+- Отметки дна (`terrain-data.js`) — Open-Meteo Elevation API
+  (данные SRTM/GMTED/Copernicus).
+- Климатическая модель (`climate-data.js`) — производная работа по данным
+  CMIP6 (multi-model mean, сценарий SSP5-8.5, через KNMI Climate Explorer),
+  CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- Исходные расчётные файлы пользователя (`Перовка_ИТОГ_расчёт_и_пояснения.xlsx`,
+  `модель клим.xlsx`, `Данные ГЭС.docx`, `Перовка_финальный_алгоритм.js`) —
+  распространяются под той же лицензией MIT, что и код; эталонный алгоритм
+  используется автотестом для проверки паритета расчёта.
+- Гидромет-данные в рантайме получаются из Open-Meteo (CC BY 4.0 для
+  результатов моделей CAMS/GLAFAS) — см. https://open-meteo.com/en/terms.

@@ -1,3 +1,23 @@
+/* ловим всё, что упало позже boot(): обработчик вешается ДО старта,
+   иначе ошибка в buildUI() осталась бы незафиксированной */
+window.addEventListener('error', e => console.error('Ошибка страницы:', e.error || e.message));
+
+/* ============================================================
+   МОДЕЛЬ (model.js) — чистые расчётные функции вынесены в отдельный
+   файл, чтобы их можно было проверять автотестами в node.
+   model.js загружается раньше app.js (см. index.html).
+   ============================================================ */
+const {
+  simulate, syntheticData: gesSynthetic, releaseCalculate, movingAverage,
+  scenarioFactor, damBreakView, alignIndex, buildTimeIndex,
+  dayOfYear, daysInMonth, utcToISO, todayISO,
+  num: fmtNum, fmtMW, fmtAxisPower, fmtEnergyKWh, fmtDateRu, isoToUTC
+} = window.GES;
+
+/* Пользователь просит меньше движения — пропускаем анимации волны
+   и плавные перелёты карты, рисуем сразу конечное состояние. */
+const REDUCED_MOTION = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 /* ============================================================
    ПАСПОРТНЫЕ ДАННЫЕ ГЭС
    flowDir — направление течения вниз по реке (0=С, 90=В, 180=Ю).
@@ -49,6 +69,11 @@ const CHART_WINDOW = 60;
 const CHART_THROTTLE_MS = 80;
 const SHOW_DECORATIVE_WAVE = false;   // декоративная волна (широкий коридор) отключена
 
+/* Шероховатость русла в 1D-модели прорыва. Единственное место, где она
+   задаётся: подпись в паспорте станции берётся отсюда же, из-за чего
+   расхождение «в UI 0,035, в коде 0,04» больше невозможно. */
+const MANNING_N = 0.04;
+
 /* ============================================================
    НАСТРОЙКИ ВОЛНЫ
    WAVE_SCALE = 1.0 — общий масштаб волны (1.0 = полный размер,
@@ -63,7 +88,11 @@ const WAVE_SCALE = 1.0;
    убирает префикс «🇺🇦 Leaflet», но СОХРАНЯЕТ копирайты OSM/OTM/Esri. */
 const map = L.map('map', { zoomControl:true, preferCanvas:true, attributionControl:false })
   .setView([60.62, 28.75], 9);
-L.control.attribution({ position:'bottomright', prefix: false }).addTo(map);
+L.control.attribution({ position:'bottomright', prefix:false }).addTo(map);
+/* Обязательная атрибутика по лицензии ODbL для контуров водохранилищ,
+   русел и высот DEM — в README её мало, она должна быть на карте. */
+map.attributionControl.addAttribution(
+  'Русла и контуры: © OpenStreetMap contributors (ODbL) · рельеф: Open-Meteo Elevation (SRTM/GMTED) · климат: CMIP6 (CC BY 4.0)');
 
 const baseLayers = {
   '🌍 OpenStreetMap': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -103,18 +132,27 @@ function polyAddUnsafe(collection, ring, o){
 }
 function clear(coll){ if (coll) coll.clearLayers(); }
 
-/* Панорама так, чтобы станция оказалась НЕ под панелями: точка ставится
-   на 62% ширины экрана (левее chart-панели, правее сайдбара). */
+/* Панорама так, чтобы станция оказалась НЕ под панелями. Раньше в коде
+   стояли «на глаз» 260/450 px и комментарий про 62% ширины — теперь
+   берём реальные размеры панелей (они перетаскиваются и ресайзятся). */
+function panelInsets(){
+  const sz = map.getSize();
+  const rect = el => (el && getComputedStyle(el).display !== 'none') ? el.getBoundingClientRect() : null;
+  const sb = rect($('sidebar'));
+  const cp = $('chartPanel').classList.contains('show') ? rect($('chartPanel')) : null;
+  const left = sb ? Math.min(sz.x * 0.45, sb.right + 10) : 12;
+  const right = cp ? Math.min(sz.x * 0.55, sz.x - cp.left + 10) : 12;
+  return { left, right };
+}
 function panToStation(h, zoom){
   const z = Math.max(map.getZoom(), zoom || 7);
   const pt = map.project([h.lat, h.lon], z);
   const sz = map.getSize();
-  /* Центрируем станцию в рабочей зоне карты между левой панелью (~260 px)
-     и правой панелью деталей/графиков (~450 px), чтобы не попадать под них. */
-  const leftPanel = 260, rightPanel = $('chartPanel').classList.contains('show') ? 450 : 120;
-  const cx = leftPanel + (sz.x - leftPanel - rightPanel) / 2;
+  const { left, right } = panelInsets();
+  const cx = left + (sz.x - left - right) / 2;
   const center = map.unproject(pt.subtract([cx - sz.x / 2, 0]), z);
-  map.flyTo(center, z, { duration: 0.7 });
+  if (REDUCED_MOTION) map.setView(center, z);
+  else map.flyTo(center, z, { duration: 0.7 });
 }
 
 /* Минимальная ЭКРАННАЯ ширина волны/зоны: на обзорном масштабе (z≈8-10,
@@ -133,6 +171,7 @@ function visFloor(h){ return h.visMinW || 500; }
 const S = {
   mode:'history', scenario:'normal',
   dates:[], results:{}, cache:{}, sources:{},
+  timeIdx:{}, timeLen:{},        // привязка ряда станции к единой дате (model.js)
   markers:{}, reservoirs:{},
   idx:0, playing:false, selected:null,
   chartPower:null, chartLevel:null,
@@ -151,11 +190,38 @@ const $ = id => document.getElementById(id);
 const setStatus = h => { $('statusText').innerHTML = h; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function showStatusMsg(msg){
+/* Временное сообщение в статусе. Прежняя версия возвращала «prev»,
+   прочитанный в момент вызова: два сообщения подряд восстанавливали
+   устаревший текст. Теперь показ стеком — каждое сообщение доедает
+   свой таймер и снимается только то, что действительно активно. */
+let statusStack = [];
+function showStatusMsg(msg, ms = 3000){
   const el = $('statusText');
-  const prev = el.innerHTML;
-  el.innerHTML = '<span class="warn">' + msg + '</span>';
-  setTimeout(() => { el.innerHTML = prev; }, 3000);
+  if (!statusStack.length) statusStack.push(el.innerHTML);
+  statusStack.push('<span class="warn">' + msg + '</span>');
+  el.innerHTML = statusStack[statusStack.length - 1];
+  setTimeout(() => {
+    const at = statusStack.lastIndexOf(el.innerHTML);
+    if (at > 0){ statusStack.splice(at, 1); el.innerHTML = statusStack[statusStack.length - 1]; }
+    else if (at === 0){ statusStack = []; }
+  }, ms);
+}
+
+/* Единая точка «станция получила ряд»: результат модели + индекс дат.
+   Индекс нужен, чтобы индексы бегунка не читались напрямую в ряду
+   другой длины (месячный климат vs суточная история vs синтетика). */
+function setStationSeries(h, mode, data, source){
+  if (mode) S.cache[mode][h.id] = data;
+  if (source) S.sources[h.id] = source;
+  S.timeIdx[h.id] = buildTimeIndex(data && data.hydro ? data.hydro.time : null);
+  S.results[h.id] = simulate(h, data.hydro, data.clim);
+  S.timeLen[h.id] = S.results[h.id].level.length;
+  return S.results[h.id];
+}
+
+/* Индекс ряда станции для текущей даты бегунка; -1 — данных нет. */
+function ki(h){
+  return alignIndex(S.idx, S.timeLen[h.id] || 0, S.timeIdx[h.id], S.dates[S.idx]);
 }
 
 function haversineM(a,b,c,d){
@@ -213,10 +279,43 @@ const RIVER_KEY_PREFIX = 'ges_river_v7_';
 const RES_KEY_PREFIX   = 'ges_res_v7_';
 const TTL = { history:12*3600*1000, forecast:30*60*1000, climate:7*24*3600*1000 };
 
-function readCacheAll(){ try{return JSON.parse(localStorage.getItem(CACHE_KEY)||'{}');}catch(e){return{};} }
+/* localStorage читаем/парсим ОДИН раз и держим снимок в памяти: раньше
+   getCached/getStaleCached/setCached на каждую станцию делали JSON.parse
+   всего блока (0.5-1 МБ на history) — 5 парсов на загрузку режима.
+   Запись — write-behind: помечаем грязным и сбрасываем пачкой. */
+let cacheMem = null;         // снимок блока
+let cacheDirty = false;
+let cacheFlushTimer = 0;
+
+function cacheSnapshot(){
+  if (cacheMem === null){
+    try { cacheMem = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); }
+    catch(e){ cacheMem = {}; }
+    if (!cacheMem || typeof cacheMem !== 'object') cacheMem = {};
+  }
+  return cacheMem;
+}
+function markCacheDirty(){
+  cacheDirty = true;
+  if (cacheFlushTimer) return;
+  const flush = () => {
+    cacheFlushTimer = 0;
+    if (!cacheDirty) return;
+    cacheDirty = false;
+    writeCacheAll(cacheSnapshot());
+  };
+  if ('requestIdleCallback' in window) cacheFlushTimer = requestIdleCallback(flush, { timeout: 2000 });
+  else cacheFlushTimer = setTimeout(flush, 400);
+}
+function invalidateCacheSnapshot(){ cacheMem = null; }
+window.addEventListener('pagehide', () => {
+  if (cacheDirty){ cacheDirty = false; writeCacheAll(cacheSnapshot()); }
+});
+
 function writeCacheAll(o){
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(o)); }
   catch(e){
+    /* квота кончилась — выкидываем самый старый режим и пробуем ещё раз */
     try {
       const keys = Object.keys(o);
       if (keys.length > 1){ delete o[keys[0]]; localStorage.setItem(CACHE_KEY, JSON.stringify(o)); }
@@ -225,13 +324,17 @@ function writeCacheAll(o){
   }
 }
 function getCached(mode,id){
-  const a=readCacheAll(); const e=a[mode]?.[id];
+  const e = cacheSnapshot()[mode]?.[id];
   if(!e) return null;
   if(Date.now()-e.ts > TTL[mode]) return null;
   return e.data;
 }
+function getCacheEntryTS(mode,id){
+  const e = cacheSnapshot()[mode]?.[id];
+  return e ? e.ts : 0;
+}
 function getStaleCached(mode,id){
-  const a=readCacheAll(); const e=a[mode]?.[id];
+  const e = cacheSnapshot()[mode]?.[id];
   return e ? e.data : null;
 }
 function compressData(data){
@@ -239,13 +342,14 @@ function compressData(data){
     hydro: { time: data.hydro.time, q: data.hydro.q.map(v => v==null?null:Math.round(v)) },
     clim: { time: data.clim.time,
       t: data.clim.t.map(v => v==null?null:Math.round(v*10)/10),
-      p: data.clim.p.map(v => v==null?null:Math.round(v*10)/10) }
+      p: data.clim.p.map(v => v==null?null:Math.round(v*10)/10) },
+    meta: data.meta || null
   };
 }
 function setCached(mode,id,data){
-  const a=readCacheAll(); if(!a[mode]) a[mode]={};
+  const a = cacheSnapshot(); if(!a[mode]) a[mode]={};
   a[mode][id]={ ts:Date.now(), data: compressData(data) };
-  writeCacheAll(a);
+  markCacheDirty();
 }
 
 /* ============================================================
@@ -273,9 +377,14 @@ async function pingAPI(){
 }
 
 /* Пока API недоступен — каждые 30 с молча перепроверяем; как только сеть
-   вернулась, автоматически докачиваем данные текущего режима. */
+   вернулась, автоматически докачиваем данные текущего режима и ТУШИМ
+   таймер (раньше интервал жил до перезагрузки страницы). */
 let offlineRetryTimer = null;
 function ensureOfflineRetry(){
+  if (apiAvailable !== false){
+    if (offlineRetryTimer){ clearInterval(offlineRetryTimer); offlineRetryTimer = null; }
+    return;
+  }
   if (offlineRetryTimer) return;
   offlineRetryTimer = setInterval(async () => {
     if (apiAvailable !== false) return;
@@ -488,29 +597,10 @@ const RELEASE = {
   ]
 };
 
-/* Алгоритм — копия calculate() из файла пользователя */
-function releaseCalculate(p, pts){
-  const volume = p.area_m2 * p.mean_drawdown_m;
-  const peak = 2 * volume / p.duration_s;
-  const tau = pts.slice(1).map((v, j) => (v[0] - pts[j][0]) / p.speed_parameter_ms);
-  const storage = tau.map(() => 0);
-  const src = t => t <= p.peak_time_s ? peak * t / p.peak_time_s :
-    (t <= p.duration_s ? peak * (p.duration_s - t) / (p.duration_s - p.peak_time_s) : 0);
-  const steps = Math.round(p.horizon_s / p.dt_s);
-  const out = new Float64Array((steps + 1) * tau.length);
-  for (let n = 0; n <= steps; n++){
-    const t = n * p.dt_s;
-    let current = src(t);
-    for (let j = 0; j < tau.length; j++){
-      if (n > 0){
-        storage[j] = (storage[j] + current * p.dt_s) / (1 + p.dt_s / tau[j]);
-        current = storage[j] / tau[j];
-      } else current = 0;
-      out[n * tau.length + j] = current;
-    }
-  }
-  return { out, tau, steps, volume, peak, bg: p.background_m3s, dt: p.dt_s, horizon: p.horizon_s };
-}
+/* Алгоритм — model.js:releaseCalculate, копию с вырезанной валидацией
+   держать нельзя: эталон «Перовка_финальный_алгоритм.js» проверяет и
+   параметры, и кратность горизонта шагу, и замыкание водного баланса.
+   Проверка паритета рядов — в tests/model.test.mjs. */
 
 function fmtClock(sec){
   const hh = Math.floor(sec / 3600), mm = Math.floor(sec % 3600 / 60);
@@ -525,8 +615,17 @@ async function startRelease(){
   }
   stopDamBreak();
   const h = HPPS.find(x => x.id === p.station);
-  const res = releaseCalculate(p.cfg, p.points);
-  S.release = { res, start: performance.now(), dur: 30 * 1000 };  // 12 ч → 30 с
+  /* releaseCalculate (model.js) проверяет параметры, кратность горизонта
+     шагу и замыкание водного баланса — при мусоре в cfg падаем явно,
+     с человекочитаемым текстом в статусе, а не рисуем молча что попало */
+  let res;
+  try {
+    res = releaseCalculate(p.cfg, p.points);
+  } catch(e){
+    showStatusMsg('Сценарий сброса: ' + e.message);
+    return;
+  }
+  S.release = { res, start: performance.now(), dur: REDUCED_MOTION ? 1500 : 30 * 1000 };  // 12 ч → 30 с
   clear(layerFlood); clear(layerFloodZone);
 
   /* русло участка (плотина → 3 км) */
@@ -542,35 +641,48 @@ async function startRelease(){
 
   /* зум на участок */
   const la = line.map(q => q[0]), lo = line.map(q => q[1]);
-  map.flyToBounds([[Math.min(...la), Math.min(...lo)], [Math.max(...la), Math.max(...lo)]],
-    { paddingTopLeft: [380, 90], paddingBottomRight: [460, 120], duration: 0.8 });
+  const bounds = [[Math.min(...la), Math.min(...lo)], [Math.max(...la), Math.max(...lo)]];
+  const pad = { paddingTopLeft: [380, 90], paddingBottomRight: [460, 120] };
+  if (REDUCED_MOTION) map.fitBounds(bounds, pad);
+  else map.flyToBounds(bounds, Object.assign({ duration: 0.8 }, pad));
 
-  /* паспорт сценария у плотины */
+  /* паспорт сценария у плотины — числа из расчёта, а не прописанные в разметке */
   setTimeout(() => {
-    L.popup({ maxWidth: 280, autoPan: false, closeButton: true, className: 'breakPop' })
+    L.popup({ maxWidth: 300, autoPan: false, closeButton: true, className: 'breakPop' })
       .setLatLng([h.lat, h.lon])
       .setContent(`<b style="color:#31c9ff">📤 ДОПОЛНИТЕЛЬНЫЙ СБРОС — учебный сценарий</b><br>
-        Объём источника: <b>${res.volume.toFixed(0)} м³</b> (площадь 15 510 м² × снижение 0,10 м)<br>
-        Пик источника: <b>${res.peak.toFixed(3)} м³/с</b> при t=20 мин · T=60 мин<br>
-        Фоновый расход Q₀: <b>1,79 м³/с</b> (медиана поста 72007, 2008–2012)<br>
-        Трансформация: 6 участков × ~500 м, каскад линейных резервуаров, c=1 м/с<br>
+        Объём источника: <b>${fmtNum(res.volume,0)} м³</b> (${fmtNum(p.cfg.area_m2,0)} м² × ${fmtNum(p.cfg.mean_drawdown_m,2)} м)<br>
+        Пик источника: <b>${fmtNum(res.peak,3)} м³/с</b> при t=${fmtNum(p.cfg.peak_time_s/60,0)} мин · T=${fmtNum(p.cfg.duration_s/60,0)} мин<br>
+        Фоновый расход Q₀: <b>${fmtNum(res.bg,2)} м³/с</b> (медиана поста 72007, 2008–2012)<br>
+        Трансформация: ${res.tau.length} участков по ~${fmtNum(avgReach(p),0)} м, каскад линейных резервуаров, c=${fmtNum(p.cfg.speed_parameter_ms,0)} м/с<br>
         <span style="color:#ffb02e;font-size:10px">Расходы рассчитаны каскадной линейной моделью (учебно).
         Зона затопления не рассчитывалась.</span>`)
       .openOn(map);
   }, 1000);
 
   $('alertBanner').classList.add('show');
-  $('details').innerHTML = releaseDetailsHTML(h);
+  $('details').innerHTML = releaseDetailsHTML(h, res);
   updateChartRelease(res);
-  requestAnimationFrame(releaseStep);
+  if (REDUCED_MOTION) releaseFinalFrame();      // без прокрутки — сразу 12 ч
+  else requestAnimationFrame(releaseStep);
 }
 
-function releaseStep(tNow){
-  if (!S.release) return;
-  const p = RELEASE, { res } = S.release;
-  const tSim = Math.min(res.horizon, (tNow - S.release.start) / 1000 * (res.horizon / (S.release.dur / 1000)));
-  const n = Math.min(res.steps, Math.round(tSim / res.dt));
+function avgReach(p){
+  const n = p.points.length - 1;
+  return n ? (p.points[n][0] - p.points[0][0]) / n : 0;
+}
+
+function fmtReleaseBanner(res, n, frontJ, finished){
   const R = res.tau.length;
+  const q6 = res.bg + res.out[n * R + R - 1];
+  return `📤 УЧЕБНЫЙ СБРОС · Перовская · t+${fmtClock(n * res.dt)} · Q₆ (${fmtNum(RELEASE.points[R][0]/1000,0)} км) = <b>${fmtNum(q6,3)} м³/с</b>` +
+    (frontJ >= 0 ? ` · волна дошла до участка ${frontJ + 1}` : ' · волна у источника') +
+    (finished ? ' · <b>сценарий завершён (' + fmtClock(res.horizon) + ')</b>' : '');
+}
+
+/* Раскладка по участкам для кадра n: переиспользуется step-ом и финалом */
+function paintReleaseFrame(n){
+  const p = RELEASE, res = S.release.res, R = res.tau.length;
   let frontJ = -1;
   for (let j = 0; j < R; j++){
     const extra = res.out[n * R + j];
@@ -578,16 +690,25 @@ function releaseStep(tNow){
     const rel = Math.min(1, extra / res.peak);
     const mk = p.reachMarkers[j];
     mk.setStyle({ fillColor: rel > 0.5 ? '#ff3b3b' : rel > 0.2 ? '#ff8a3d' : rel > 0.02 ? '#ffb02e' : '#1a4a6b' });
-    mk.setTooltipContent(`участок ${j+1} · ${p.points[j+1][0]} м<br><b>${tot.toFixed(3)} м³/с</b>` +
-      (extra > 0.001 ? ` <span style="color:#ffb02e">(+${extra.toFixed(3)})</span>` : ''));
+    mk.setTooltipContent(`участок ${j+1} · ${fmtNum(p.points[j+1][0],0)} м<br><b>${fmtNum(tot,3)} м³/с</b>` +
+      (extra > 0.001 ? ` <span style="color:#ffb02e">(+${fmtNum(extra,3)})</span>` : ''));
     if (extra > 0.005) frontJ = j;
   }
-  const q6 = res.bg + res.out[n * R + R - 1];
-  $('alertBanner').innerHTML =
-    `📤 УЧЕБНЫЙ СБРОС · Перовская · t+${fmtClock(n * res.dt)} · Q₆ (3 км) = <b>${q6.toFixed(3)} м³/с</b>` +
-    (frontJ >= 0 ? ` · волна дошла до участка ${frontJ + 1}` : ' · волна у источника');
+  $('alertBanner').innerHTML = fmtReleaseBanner(res, n, frontJ, n >= res.steps);
+}
+
+function releaseFinalFrame(){
+  if (!S.release) return;
+  paintReleaseFrame(S.release.res.steps);
+}
+
+function releaseStep(tNow){
+  if (!S.release) return;
+  const res = S.release.res;
+  const tSim = Math.min(res.horizon, (tNow - S.release.start) / 1000 * (res.horizon / (S.release.dur / 1000)));
+  const n = Math.min(res.steps, Math.round(tSim / res.dt));
+  paintReleaseFrame(n);
   if (n < res.steps) requestAnimationFrame(releaseStep);
-  else $('alertBanner').innerHTML += ' · <b>сценарий завершён (12 ч)</b>';
 }
 
 function stopRelease(){
@@ -595,22 +716,36 @@ function stopRelease(){
   clear(layerFlood); clear(layerFloodZone);
   $('alertBanner').classList.remove('show');
   if (RELEASE.reachMarkers) RELEASE.reachMarkers = null;
+  /* панель деталей после сценария оставалась «сбросовой» — возвращаем паспорт */
+  if (S.selected){
+    const h = HPPS.find(x => x.id === S.selected);
+    if (h) $('details').innerHTML = detailsHTML(h);
+    updateChart();
+  }
 }
 
-function releaseDetailsHTML(h){
+function releaseDetailsHTML(h, res){
+  const p = RELEASE, c = p.cfg;
+  const bal = res && res.balance;
+  const balLine = bal
+    ? `<div class="kv"><span>Баланс воды</span><span style="color:${bal.ok?'#3ddc84':'#ff6b6b'}">${bal.ok?'✓ сходится':'⚠ расходится'} · ${fmtNum(bal.remaining,1)} м³ в резервуарах</span></div>`
+    : '';
   return `<h3>${h.name}</h3>
   <div style="font-size:11px;margin-bottom:6px;color:#31c9ff">📤 Учебный сценарий дополнительного сброса</div>
   <div class="kv"><span>Модель</span><span>каскад линейных резервуаров</span></div>
   <div class="kv"><span>Источник</span><span>треугольный гидрограф</span></div>
-  <div class="kv"><span>Объём V_b</span><span>1 551 м³</span></div>
-  <div class="kv"><span>Пик q_b,max</span><span>0,862 м³/с (t=20 мин)</span></div>
-  <div class="kv"><span>Фон Q₀</span><span>1,79 м³/с</span></div>
-  <div class="kv"><span>Шаг / горизонт</span><span>30 с / 12 ч</span></div>
-  <div class="kv"><span>Участки</span><span>6 × ~500 м, до 3 км</span></div>
-  <div class="kv"><span>Сценарий</span><span style="font-size:10px">area15510_drawdown010</span></div>
+  <div class="kv"><span>Объём V_b</span><span>${fmtNum(res.volume,0)} м³</span></div>
+  <div class="kv"><span>Пик q_b,max</span><span>${fmtNum(res.peak,3)} м³/с (t=${fmtNum(c.peak_time_s/60,0)} мин)</span></div>
+  <div class="kv"><span>Фон Q₀</span><span>${fmtNum(res.bg,2)} м³/с</span></div>
+  <div class="kv"><span>Шаг / горизонт</span><span>${fmtNum(c.dt_s,0)} с / ${fmtClock(c.horizon_s)}</span></div>
+  <div class="kv"><span>Участки</span><span>${res.tau.length} × ~${fmtNum(avgReach(p),0)} м, до ${fmtNum(p.points[p.points.length-1][0]/1000,1)} км</span></div>
+  <div class="kv"><span>Скорость c</span><span>${fmtNum(c.speed_parameter_ms,0)} м/с</span></div>
+  ${balLine}
+  <div class="kv"><span>Сценарий</span><span style="font-size:10px">area${c.area_m2}_drawdown${String(c.mean_drawdown_m).replace('0.','').padEnd(3,'0')}</span></div>
   <div style="margin-top:8px;padding:8px 10px;background:rgba(49,201,255,.08);border:1px solid rgba(49,201,255,.25);border-radius:8px;font-size:11px;line-height:1.5">
-    Реализовано строго по «Перовка_ИТОГ_расчёт_и_пояснения.xlsx»:
+    Реализовано по «Перовка_ИТОГ_расчёт_и_пояснения.xlsx»:
     Sᵢⁿ⁺¹ = (Sᵢⁿ + IᵢΔt)/(1+Δt/τᵢ), Oᵢ = Sᵢ/τᵢ, τᵢ=Lᵢ/c.
+    Ряды сверяются автотестом с «Перовка_финальный_алгоритм.js» (npm test).
     Подписи у точек маршрута показывают полный расход Qᵢ=Q₀+Oᵢ.
     <div style="color:#ffb02e;margin-top:4px">Не инженерный прогноз прорыва; зона затопления не строилась.</div>
   </div>`;
@@ -636,10 +771,20 @@ function updateChartRelease(res){
   cp.data.labels = labels;
   cp.data.datasets = ds;
   cp.options.scales.y.title.text = 'Расход, м³/с';
-  cp.options.plugins.tooltip.callbacks = { label: ctx => ctx.parsed.y.toFixed(4)+' м³/с' };
+  /* 6 серий разного цвета без легенды читаться не будут — включаем только
+     здесь, в обычном режиме на графике одна линия и легенда не нужна */
+  cp.options.plugins.legend.display = true;
+  cp.options.plugins.legend.labels = { color:'#dbe6f2', boxWidth:9, boxHeight:9, font:{size:9} };
+  cp.options.scales.y.ticks.callback = v => fmtNum(+v, 2);
+  cp.options.scales.x.ticks = Object.assign({}, cp.options.scales.x.ticks, { color:'#8ba0b6', font:{size:8} });
+  cp.options.scales.x.display = true;
+  cp.options.plugins.tooltip.callbacks = { label: ctx => ` ${ctx.dataset.label.split(',')[0]}: ${fmtNum(ctx.parsed.y,4)} м³/с` };
   cp.update('none');
+  /* нижний график освобождается: уровень при сбросе не моделируется */
   S.chartLevel.data.labels = [];
   S.chartLevel.data.datasets = [];
+  const lbl = $('chartLabelLevel');
+  if (lbl) lbl.textContent = 'уровень ВБ в учебном сценарии сброса не рассчитывается';
   S.chartLevel.update('none');
 }
 
@@ -749,50 +894,71 @@ out geom;`;
 /* ============================================================
    СИНТЕТИКА И OPEN-METEO
    ============================================================ */
-function syntheticData(h, mode){
-  let start, end;
-  if (mode === 'history'){ start=new Date(HISTORY_START); end=new Date(Date.now()-8*864e5); }
-  else if (mode === 'forecast'){ start=new Date(Date.now()-30*864e5); end=new Date(Date.now()+16*864e5); }
-  else { start=new Date('2025-01-01'); end=new Date('2030-12-31'); }
+/* Генератор ряда лежит в model.js (syntheticData) — там календарь идёт по
+   UTC-миллисекундям. Прежняя локальная версия на переходе через летнее
+   время выдавала дубль дня и пропуск следующего (в Europe/Berlin — 4 и 4
+   за период с 2023 г.), из-за чего офлайн-ряд расходился с рядом
+   Open-Meteo (timezone=UTC) на сутки. */
+const syntheticData = (h, mode) => gesSynthetic(h, mode, { start: HISTORY_START, now: Date.now() });
 
-  const times=[], qs=[], ts=[], ps=[];
-  const QmaxT = h.capacityMW*1e6/(1000*9.81*h.head*h.eff);
-  const Qmean = 0.4*QmaxT;
-  const seed = h.id.split('').reduce((a,c)=>a+c.charCodeAt(0),0);
-  const latF = Math.min(1, Math.abs(h.lat-45)/20);
-
-  for (let d=new Date(start); d<=end; d.setDate(d.getDate()+1)){
-    times.push(d.toISOString().slice(0,10));
-    const doy = Math.floor((d - new Date(d.getFullYear(),0,0))/864e5);
-    const ang = (doy/365.25)*2*Math.PI;
-    const spring = Math.exp(-Math.pow((doy-130)/45,2));
-    const noise = 0.85 + 0.3*Math.sin(ang*7+seed) + 0.15*Math.sin(ang*23+seed*2);
-    qs.push(Math.max(50, Qmean*(0.35 + 1.4*spring)*noise));
-    ts.push(5 + latF*3 + (13+latF*5)*Math.sin(ang - Math.PI/2 - 0.2) + 1.5*Math.sin(ang*5+seed));
-    ps.push(Math.max(0, 1.8 + 1.2*Math.sin(ang+1) + 0.6*Math.sin(ang*6+seed)));
+/* ============================================================
+   Open-Meteo: один запрос на весь список станций
+   API принимает координаты через запятую и отдаёт массив результатов,
+   поэтому 6 станций × 2 сервиса = 12 запросов на режим сворачиваются
+   в 2: быстрее первый кадр и нет риска упереться в 429.
+   ============================================================ */
+function openMeteoUrls(mode, lats, lons){
+  if (mode === 'history'){
+    const range = `&start_date=${HISTORY_START}&end_date=${todayISO(8)}`;
+    return [
+      `https://archive-api.open-meteo.com/v1/archive?latitude=${lats}&longitude=${lons}&daily=temperature_2m_mean,precipitation_sum&timezone=UTC${range}`,
+      `https://flood-api.open-meteo.com/v1/flood?latitude=${lats}&longitude=${lons}&daily=river_discharge&timezone=UTC${range}`
+    ];
   }
-  return { hydro:{time:times,q:qs}, clim:{time:times,t:ts,p:ps} };
+  const range = '&past_days=30&forecast_days=16';
+  return [
+    `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&daily=temperature_2m_mean,precipitation_sum${range}&timezone=UTC`,
+    `https://flood-api.open-meteo.com/v1/flood?latitude=${lats}&longitude=${lons}&daily=river_discharge${range}&timezone=UTC`
+  ];
+}
+
+/* Кое-какая провенанс-информация из ответа: какая ячейка сетки 0.1° реально
+   использована и на какой модели — для малых ГТС это важно показывать. */
+function apiMeta(root){
+  if (!root || typeof root !== 'object' || Array.isArray(root)) return null;
+  const m = {};
+  for (const k of ['latitude','longitude','elevation','model','grid_code','timezone','generationtime_ms'])
+    if (root[k] != null) m[k] = root[k];
+  return Object.keys(m).length ? m : null;
+}
+function nthPayload(raw, i){
+  const r = Array.isArray(raw) ? (raw[i] || null) : (i ? null : raw);
+  return r && r.daily ? r : null;
+}
+function assembleData(rawClim, rawHydro){
+  return {
+    hydro: { time: rawHydro.daily.time, q: rawHydro.daily.river_discharge },
+    clim:  { time: rawClim.daily.time,  t: rawClim.daily.temperature_2m_mean, p: rawClim.daily.precipitation_sum },
+    meta:  apiMeta(rawHydro)
+  };
+}
+
+/* → { [id]: data } для тех станций, по которым оба сервиса ответили. */
+async function fetchFromAPIBatch(mode, list){
+  const stations = list && list.length ? list : HPPS;
+  const lats = stations.map(h => h.lat).join(',');
+  const lons = stations.map(h => h.lon).join(',');
+  const [rawClim, rawHydro] = await Promise.all(openMeteoUrls(mode, lats, lons).map(u => fetchWithRetry(u, 15000, 3)));
+  const out = {};
+  stations.forEach((h, i) => {
+    const c = nthPayload(rawClim, i), f = nthPayload(rawHydro, i);
+    if (c && f) out[h.id] = assembleData(c, f);
+  });
+  if (!Object.keys(out).length) throw new Error('Open-Meteo вернул пустой ответ');
+  return out;
 }
 
 async function fetchFromAPI(h, mode){
-  if (mode === 'history'){
-    const start = HISTORY_START;
-    const end = new Date(Date.now()-8*864e5).toISOString().slice(0,10);
-    const [a,f] = await Promise.all([
-      fetchWithRetry(`https://archive-api.open-meteo.com/v1/archive?latitude=${h.lat}&longitude=${h.lon}&start_date=${start}&end_date=${end}&daily=temperature_2m_mean,precipitation_sum&timezone=UTC`),
-      fetchWithRetry(`https://flood-api.open-meteo.com/v1/flood?latitude=${h.lat}&longitude=${h.lon}&daily=river_discharge&start_date=${start}&end_date=${end}`)
-    ]);
-    return { hydro:{time:f.daily.time, q:f.daily.river_discharge},
-             clim:{time:a.daily.time, t:a.daily.temperature_2m_mean, p:a.daily.precipitation_sum} };
-  }
-  if (mode === 'forecast'){
-    const [a,f] = await Promise.all([
-      fetchWithRetry(`https://api.open-meteo.com/v1/forecast?latitude=${h.lat}&longitude=${h.lon}&daily=temperature_2m_mean,precipitation_sum&past_days=30&forecast_days=16&timezone=UTC`),
-      fetchWithRetry(`https://flood-api.open-meteo.com/v1/flood?latitude=${h.lat}&longitude=${h.lon}&daily=river_discharge&past_days=30&forecast_days=16`)
-    ]);
-    return { hydro:{time:f.daily.time, q:f.daily.river_discharge},
-             clim:{time:a.daily.time, t:a.daily.temperature_2m_mean, p:a.daily.precipitation_sum} };
-  }
   if (mode === 'climate'){
     /* Климатический режим — ТОЛЬКО файл пользователя «модель клим.xlsx»
        (climate-data.js): CMIP6 ens-mean SSP5-8.5, осадки мм/день помесячно,
@@ -808,7 +974,7 @@ async function fetchFromAPI(h, mode){
         const v = row[m+1];
         if (v == null) continue;
         time.push(`${y}-${String(m+1).padStart(2,'0')}-15`);
-        p.push(v * new Date(y, m+1, 0).getDate());   // мм/день → мм/мес
+        p.push(v * daysInMonth(y, m+1));   // мм/день → мм/мес (календарь UTC, model.js)
         t.push(null);
       }
     }
@@ -817,9 +983,17 @@ async function fetchFromAPI(h, mode){
     const valid = p.filter(v => v != null && v > 0);
     const Pmean = valid.length ? valid.reduce((s,v)=>s+v,0)/valid.length : 50;
     const q = p.map(P => Math.max(0, Qmean*(0.4 + 0.8*(P||0)/Math.max(0.1,Pmean))));
-    return { hydro:{time, q}, clim:{time, t, p} };
+    /* Месячный ряд: точка данных — середина месяца (15-е). Из-за другой
+       сетки дат он не совпадает с суточным рядом по индексу — поэтому
+       все ряды сводятся по дате (GES.alignIndex), а не по номеру. */
+    return { hydro:{time, q}, clim:{time, t, p},
+             meta: { model:'CMIP6 ens-mean SSP5-8.5', grid_code:'месяц, 15-е число', timezone:'UTC' } };
   }
-  throw new Error('unknown mode');
+  /* история/прогноз — тот же пакетный запрос, но для одной станции
+     (используется selectHPP для станций вне очереди докачки) */
+  const batch = await fetchFromAPIBatch(mode, [h]);
+  if (!batch[h.id]) throw new Error('Open-Meteo не вернул ряд по станции');
+  return batch[h.id];
 }
 
 async function loadStation(h, mode){
@@ -850,80 +1024,30 @@ async function loadStation(h, mode){
 }
 
 /* ============================================================
-   МОДЕЛЬ
+   ПЕРЕСЧЁТ ПОД СЦЕНАРИЙ
+   Модель ряда — в model.js (simulate), здесь только связка с состоянием.
    ============================================================ */
-function simulate(h, hydro, clim){
-  const dh = h.nmu - h.umo;
-  const A0 = h.areaNMU * 1e6;
-  const Vd = (h.totalVolume - h.usefulVolume) * 1e9;
-  const p1 = Math.max(0.6, A0*dh/(h.usefulVolume*1e9));
-  const p = p1 - 1;
-  const VofX = x => Vd + A0*dh*Math.pow(x,p1)/p1;
-  const AofX = x => A0*Math.pow(Math.max(x,1e-6),p);
-  const xOfV = v => Math.pow(Math.max(1e-6, v-Vd)*p1/(A0*dh), 1/p1);
-  const QmaxT = h.capacityMW*1e6/(1000*9.81*h.head*h.eff);
-  const tailBase = h.nmu - h.head;
-  const n = hydro.q.length;
-  const out = { level:[], area:[], power:[], flow:[], spill:[], head:[], lf:[], kwh:0 };
-  const cs = new Float64Array(n+1);
-  for (let i=0;i<n;i++) cs[i+1] = cs[i] + (hydro.q[i]||0);
-  const WIN = 60;
-  const trail = i => { const a=Math.max(0,i-WIN), b=i+1; return (cs[b]-cs[a])/(b-a); };
-  const targetX = 0.62;
-  let vol = VofX(targetX);
-  for (let i=0;i<n;i++){
-    const x = Math.min(1, Math.max(1e-6, xOfV(vol)));
-    const level = h.umo + x*dh;
-    const area = AofX(x);
-    const T = clim.t[i] ?? 8;
-    const Pr = clim.p[i] ?? 0;
-    const Qevap = Math.max(0, 0.12*(T+2))/1000*area/86400;
-    const Qrain = Pr/1000*area/86400;
-    const Qnet = Math.max(0, hydro.q[i]||0) + Qrain - Qevap;
-    const Qbase = trail(i);
-    const err = level - (h.umo + targetX*dh);
-    let Qrel = Math.max(0, Qbase + err*area/(20*86400));
-    const tw = tailBase + 1.6*Math.pow(Math.min(1.2, Qrel/(QmaxT+1)), 0.5);
-    const headNet = Math.max(2, (level-tw)*0.97);
-    const Qcap = QmaxT * Math.min(1.15, Math.sqrt(h.head/Math.max(5,headNet)));
-    let Qt = Math.min(Qrel, Qcap);
-    let Qsp = Math.max(0, Qrel - Qt);
-    if (level < h.nmu - 0.5) Qsp = 0;
-    let volNew = vol + (Qnet - Qt - Qsp)*86400;
-    if (volNew > VofX(1)){ Qsp += (volNew - VofX(1))/86400; volNew = VofX(1); }
-    if (volNew < VofX(0.02)) volNew = VofX(0.02);
-    vol = volNew;
-    const qr = Math.min(1, Qt/QmaxT);
-    const etaPart = 1 - 0.30*Math.pow(1-qr, 2);
-    const ice = T < -5 ? 0.98 : 1;
-    let P = 1000*9.81*Qt*headNet*h.eff*etaPart*ice/1e6;
-    P = Math.min(P, h.capacityMW);
-    out.kwh += P*24;
-    out.level.push(level); out.area.push(area/1e6);
-    out.power.push(P); out.flow.push(Qt+Qsp); out.spill.push(Qsp);
-    out.head.push(headNet); out.lf.push(P/h.capacityMW);
-  }
-  out.p1 = p1;
-  return out;
-}
-
 function recompute(){
   HPPS.forEach(h => {
     const c = S.cache[S.mode]?.[h.id];
-    if (!c){ delete S.results[h.id]; return; }
+    if (!c){ delete S.results[h.id]; S.timeLen[h.id] = 0; return; }
+
+    /* Сценарные множители зависят от КАЛЕНДАРНОЙ ДАТЫ ряда, а не от S.idx:
+       старый вариант с гауссианой вокруг позиции бегунка «замораживал» пик
+       паводка там, где сценарий включили, и уводил его при перемотке. */
     let q = c.hydro.q;
-    if (S.scenario === 'flood'){
-      const i = S.idx;
-      q = q.map((v,k) => (v||0) * (1 + 5*Math.exp(-(k-i)*(k-i)/400)));
-    } else if (S.scenario === 'drought'){
-      q = q.map(v => (v||0) * 0.15);
+    if (S.scenario === 'flood' || S.scenario === 'drought'){
+      const times = c.hydro.time;
+      q = q.map((v, k) => (v || 0) * scenarioFactor(h, times[k], S.scenario));
     }
-    S.results[h.id] = simulate(h, { time:c.hydro.time, q }, c.clim);
+
+    setStationSeries(h, null, { hydro: { time: c.hydro.time, q }, clim: c.clim }, null);
+
     if (S.scenario === 'dam_break' && S.selected === h.id){
-      const r = S.results[h.id];
-      for (let k=0;k<r.power.length;k++){
-        r.power[k]=0; r.lf[k]=0; r.spill[k]=r.flow[k]; r.flow[k]=0;
-      }
+      /* копия, а не правка на месте — иначе обнулённые ряды оставались
+         «мёртвыми» и после выключения сценария, пока их кто-то не
+         пересчитает */
+      S.results[h.id] = damBreakView(S.results[h.id]);
     }
   });
 }
@@ -934,27 +1058,58 @@ function recompute(){
 function createMarker(h){
   const mk = L.circleMarker([h.lat, h.lon], {
     radius: 8, color:'#ffffff', weight: 2.5,
-    fillColor:'#888', fillOpacity: 1, opacity: 1
+    fillColor:'#888', fillOpacity: 1, opacity: 1,
+    keyboard: true,                    // Leaflet даёт метке tabindex — доступна с клавиатуры
+    title: h.name
   }).addTo(layerMarkers);
   mk.on('click', () => selectHPP(h.id, false));
   mk.bindTooltip(h.name, { direction:'top', offset:[0,-8] });
+  /* Функция вместо строки: Leaflet вызовет её в момент открытия попапа.
+     Раньше HTML шести станций пересобирался на КАЖДЫЙ кадр анимации. */
+  mk.bindPopup(() => popupFor(h), { maxWidth: 330 });
   S.markers[h.id] = mk;
   return mk;
+}
+
+function popupFor(h){
+  const i = ki(h);
+  const r = S.results[h.id];
+  if (!r || i < 0) return `<h4>${h.name}</h4><p style="margin:0;color:var(--dim)">нет данных</p>`;
+  return popupHTML(h, r, i, markerColor(h, r, i));
 }
 
 /* ============================================================
    ТАЙМЛАЙН
    ============================================================ */
-function updateTimeline(mode){
+function updateTimeline(mode, keepIdx){
   const sl = $('slider');
-  sl.max = S.dates.length - 1;
-  S.idx = Math.floor(S.dates.length / 2);
-  sl.value = S.idx;
   const n = S.dates.length;
-  const fmt = d => mode === 'history' ? d.slice(0,4) : d.slice(0,7);
+  sl.max = Math.max(0, n - 1);
+  if (!keepIdx) S.idx = Math.floor(n / 2);
+  S.idx = Math.max(0, Math.min(S.idx, Math.max(0, n - 1)));
+  sl.value = S.idx;
+  const fmt = d => mode === 'history' ? String(d).slice(0,4) : String(d).slice(0,7);
+  if (!n){ $('tickA').textContent = $('tickB').textContent = $('tickC').textContent = '—'; return; }
   $('tickA').textContent = fmt(S.dates[0]);
   $('tickB').textContent = fmt(S.dates[Math.floor(n/2)]);
   $('tickC').textContent = fmt(S.dates[n-1]);
+}
+
+/* Единая календарная ось: самый длинный ряд из загруженных станций.
+   Осмысленный выбор, а не «кто первый успел»: при смешении кэша,
+   API и синтетики длины рядов различаются. */
+function syncAxis(mode, keepIdx){
+  let best = null;
+  for (const h of HPPS){
+    const c = S.cache[mode]?.[h.id];
+    const t = c && c.hydro ? c.hydro.time : null;
+    if (t && t.length && (!best || t.length > best.length)) best = t;
+  }
+  if (!best) return false;
+  const changed = best !== S.dates;
+  S.dates = best;
+  updateTimeline(mode, keepIdx || !changed);
+  return true;
 }
 
 /* ============================================================
@@ -963,47 +1118,48 @@ function updateTimeline(mode){
 async function loadPeriod(mode){
   if (S.loading) return;
   S.loading = true;
+  try {
+    await loadPeriodInner(mode);
+  } catch(e){
+    console.error('loadPeriod:', e);
+    setStatus(`<span class="err">ошибка загрузки: ${e.message}</span>`);
+  } finally {
+    S.loading = false;      // раньше флаг оставался поднятым при исключении,
+  }                         // и переключение режимов молча переставало работать
+}
 
+function hppRow(id){ return document.querySelector(`.hppItem[data-id="${id}"]`); }
+function hppRowSet(id, srcCls, mw){
+  const item = hppRow(id);
+  if (!item) return;
+  const dot = item.querySelector('.src');
+  if (dot) dot.className = 'src ' + srcCls;
+  if (mw !== undefined) item.querySelector('.mw').textContent = mw;
+}
+
+async function loadPeriodInner(mode){
   S.results = {}; S.idx = 0; S.playing = false; S.damBreak = null; S.dates = [];
   S.cache[mode] = {}; S.sources = {}; S.loadingStation = {};
+  S.timeIdx = {}; S.timeLen = {};
 
   clear(layerFlood);
   clear(layerRes);
   S.reservoirs = {};
   $('playBtn').textContent = '▶';
 
-  HPPS.forEach(h => {
-    const item = document.querySelector(`.hppItem[data-id="${h.id}"]`);
-    if (!item) return;
-    item.querySelector('.src').className = 'src loading';
-    item.querySelector('.mw').textContent = '…';
-  });
+  HPPS.forEach(h => hppRowSet(h.id, 'loading', '…'));
   setStatus(`<span class="warn">загрузка</span> · ${mode}`);
 
+  /* 1. Мгновенно показываем всё, что есть в кэше */
   let fromCache = 0;
   HPPS.forEach(h => {
     const cached = getCached(mode, h.id);
-    if (cached){
-      S.cache[mode][h.id] = cached;
-      S.sources[h.id] = 'cache';
-      S.results[h.id] = simulate(h, cached.hydro, cached.clim);
-      fromCache++;
-      const item = document.querySelector(`.hppItem[data-id="${h.id}"]`);
-      if (item){
-        item.querySelector('.src').className = 'src cache';
-        item.querySelector('.mw').textContent = capLabel(h);
-      }
-    }
+    if (!cached) return;
+    setStationSeries(h, mode, cached, 'cache');
+    fromCache++;
+    hppRowSet(h.id, 'cache', capLabel(h));
   });
-
-  if (fromCache){
-    const first = HPPS.find(h => S.cache[mode][h.id]);
-    if (first){
-      S.dates = S.cache[mode][first.id].hydro.time;
-      updateTimeline(mode);
-      recompute(); render();
-    }
-  }
+  if (fromCache){ syncAxis(mode); recompute(); render(); }
 
   if (apiAvailable !== true) await pingAPI();
 
@@ -1015,59 +1171,69 @@ async function loadPeriod(mode){
 
   if (!apiAvailable && !missing.length){
     setStatus(`<b>${mode}</b> · <span class="warn">🟡 ${fromCache} из кэша (офлайн)</span>`);
-    S.loading = false;
     return;
   }
 
-  /* Фоновая ревалидация: кэш показываем мгновенно, но если он старше
-     порога — молча докачиваем свежие данные и обновляем отображение. */
+  /* 2. Фоновая ревалидация: кэш показываем сразу, но если он старше
+        порога — молча докачиваем свежие данные. */
   const REVALIDATE_MS = { history: 3600e3, forecast: 10*60e3, climate: 24*3600e3 };
-  let stale = [];
-  if (apiAvailable){
-    const all = readCacheAll();
-    const now = Date.now();
-    stale = HPPS.filter(h => {
-      if (!S.cache[mode][h.id]) return false;
-      const e = all[mode]?.[h.id];
-      return e && (now - e.ts > REVALIDATE_MS[mode]);
-    });
-  }
+  const now = Date.now();
+  const stale = apiAvailable ? HPPS.filter(h => {
+    if (!S.cache[mode][h.id]) return false;
+    const ts = getCacheEntryTS(mode, h.id);
+    return ts && (now - ts > REVALIDATE_MS[mode]);
+  }) : [];
 
   const queue = [...missing, ...stale];
-  let done = 0, countApi = 0, countSynth = 0;
+  let countApi = 0, countSynth = 0;
+
+  if (queue.length && apiAvailable && mode !== 'climate'){
+    /* 3. Один пакетный запрос на все станции очереди (было 2 на каждую) */
+    try {
+      const batch = await fetchFromAPIBatch(mode, queue);
+      for (const h of queue){
+        const data = batch[h.id];
+        if (!data) continue;
+        setCached(mode, h.id, data);
+        setStationSeries(h, mode, data, 'api');
+        hppRowSet(h.id, 'api', capLabel(h));
+        countApi++;
+      }
+      syncAxis(mode, true);
+      recompute(); render();
+    } catch(e){
+      lastApiError = e.message || String(e);
+      console.warn('Пакетный запрос Open-Meteo не удался, перехожу на поштучный:', e.message);
+    }
+  }
+
+  /* 4. Что пакет не закрыл — докачиваем по одной станции (3 параллельно) */
+  const rest = queue.filter(h => S.sources[h.id] !== 'api');
+  const total = rest.length;
+  let done = 0;
 
   async function worker(){
-    while (queue.length){
-      const h = queue.shift();
+    while (rest.length){
+      const h = rest.shift();
       if (S.loadingStation[h.id]) continue;
       S.loadingStation[h.id] = true;
       const { data, source } = await loadStation(h, mode);
-      S.cache[mode][h.id] = data;
-      S.sources[h.id] = source;
-      S.results[h.id] = simulate(h, data.hydro, data.clim);
+      setStationSeries(h, mode, data, source);
       delete S.loadingStation[h.id];
 
       if (source === 'api') countApi++;
       else countSynth++;
+      hppRowSet(h.id, source, capLabel(h));
 
-      const item = document.querySelector(`.hppItem[data-id="${h.id}"]`);
-      if (item){
-        item.querySelector('.src').className = 'src ' + source;
-        item.querySelector('.mw').textContent = capLabel(h);
-      }
-
-      if (!S.dates.length){
-        S.dates = data.hydro.time;
-        updateTimeline(mode);
-      }
+      syncAxis(mode, true);
       recompute(); render();
 
       done++;
-      setStatus(`<span class="warn">докачка</span> · ${done}/${queue.length}`);
+      setStatus(`<span class="warn">докачка</span> · ${done}/${total}`);
       await sleep(120);
     }
   }
-  await Promise.all([worker(), worker(), worker()]);
+  if (total) await Promise.all([worker(), worker(), worker()]);
 
   const parts = [];
   if (fromCache) parts.push(`<span class="warn">🟡 ${fromCache} из кэша</span>`);
@@ -1079,8 +1245,7 @@ async function loadPeriod(mode){
       parts.push(`<span class="warn">повторная проверка каждые 30 с · или нажмите ⟳</span>`);
     }
   }
-  setStatus(`<b>${mode}</b> · ${parts.join(' · ')}`);
-  S.loading = false;
+  setStatus(`<b>${mode}</b> · ${parts.join(' · ') || 'нет данных'}`);
 }
 
 /* ============================================================
@@ -1249,10 +1414,11 @@ function makeFloodFootprint(h, course){
      ∂A/∂t + ∂Q/∂x = 0
      ∂Q/∂t + ∂(Q²/A + gA²/2B̄)/∂x = −gA·dz/∂x − g·n²·Q|Q|·A/(A·R^{4/3})
    Канал — трапеция (B(s) по дну, откос m=1:18), шероховатость Мэннинга
-   n=0.035 (горный галечник). Профиль дна — реальный (SRTM/DEM, встроен).
+   n=0.04 (горный галечник). Профиль дна — реальный (SRTM/DEM, встроен).
    Граничное условие на створе — водослив широкого порога с формированием
    прорана за ~20 мин и опорожнением водохранилища (баланс объёма).
-   Схема Годунова с потоком Гуно (HLL), адаптивный шаг по Куранту;\n   сухое дно обрабатывается корректно (переход мокрое/сухое).
+   Схема Годунова с потоком Гуно (HLL), адаптивный шаг по Куранту,
+   сухое дно обрабатывается корректно (переход мокрое/сухое).
    ============================================================ */
 function resampleUniform(course, ds){
   /* единая сетка ds вдоль русла; заодно — кумулятивная дистанция исходного курса */
@@ -1290,7 +1456,7 @@ function simulateDamBreak(h, course, elev){
     for (let k=1;k<N;k++) z[k] = (z[k-1] + 2*z[k] + z[k+1]) / 4;
   }
 
-  const g = 9.81, nM = 0.04, mSide = 6;   /* откосы стенок каньона 1:6 — только для показа ширины */
+  const g = 9.81, nM = MANNING_N, mSide = 6;   /* откосы стенок каньона 1:6 — только для показа ширины */
   const wCell = new Float64Array(N+1);          // характерная ширина русла (м)
   for (let k=0;k<=N;k++){
     const s = k*ds / Math.max(1, L);
@@ -1411,7 +1577,7 @@ function simulateDamBreak(h, course, elev){
   const lastF = frames[frames.length-1] || { front: 0 };
   return { line, ds, N, L, frames, maxW, simT: t, H0eff,
            frontKm: lastF.front*ds/1000,
-           physInfo: `H₀=${H0eff.toFixed(0)} м, Мэннинг n=0.04` };
+           physInfo: `H₀=${fmtNum(H0eff,0)} м, Мэннинг n=${fmtNum(MANNING_N,2)}` };
 }
 
 /* ============================================================
@@ -1458,19 +1624,16 @@ async function startDamBreak(){
     /* перенос и зум на зону прорыва, чтобы волну было видно */
     const seg = sim.line.slice(0, maxK + 1);
     const la = seg.map(p => p[0]), lo = seg.map(p => p[1]);
-    map.flyToBounds(
-      [[Math.min(...la), Math.min(...lo)], [Math.max(...la), Math.max(...lo)]],
-      { paddingTopLeft: [370, 90], paddingBottomRight: [450, 120], duration: 0.7 });
+    const bnds = [[Math.min(...la), Math.min(...lo)], [Math.max(...la), Math.max(...lo)]];
+    const pad  = { paddingTopLeft: [panelInsets().left + 10, 90], paddingBottomRight: [panelInsets().right + 10, 120] };
+    if (REDUCED_MOTION) map.fitBounds(bnds, pad);
+    else map.flyToBounds(bnds, Object.assign({ duration: 0.7 }, pad));
     polyAdd(layerFloodZone, footPts, {
       color:'#ff9400', weight:1.5, opacity:0.85, dash:true,
       fill:'#ffa726', fillOpacity:0.20
     });
 
-    const realDur = Math.min(60, Math.max(20, sim.simT / 240));
-    const fmtT = s => {
-      const m2 = Math.floor(s/60), h2 = Math.floor(m2/60);
-      return (h2 ? h2 + 'ч ' : '') + (m2 % 60) + 'м';
-    };
+    const realDur = REDUCED_MOTION ? 1 : Math.min(60, Math.max(20, sim.simT / 240));
     S.damBreak = { id:h.id, progress:0, start:performance.now(), duration: realDur, course };
     $('alertBanner').classList.add('show');
     recompute(); render();
@@ -1478,53 +1641,79 @@ async function startDamBreak(){
     /* простое окошко у плотины: только длина волны */
     const waveKm = courseLength(sim.line.slice(0, maxK + 1)) / 1000;
     setTimeout(() => {
-      L.popup({ maxWidth: 220, autoPan: false, closeButton: false, className: 'breakPop' })
+      L.popup({ maxWidth: 240, autoPan: false, closeButton: false, className: 'breakPop' })
         .setLatLng([h.lat, h.lon])
-        .setContent(`<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>Длина волны: <b>${waveKm.toFixed(1)} км</b>`)
+        .setContent(`<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>
+          Длина волны: <b>${fmtNum(waveKm,1)} км</b> · расчёт ${fmtNum(sim.simT/3600,1)} ч<br>
+          <span style="color:#8ba0b6;font-size:10px">${sim.physInfo}</span>`)
         .openOn(map);
     }, 500);
+
+    /* Один полигон на всю анимацию: меняем только вершины (setLatLngs).
+       Прежний clear()+L.polygon() на каждый кадр плодил слой за слоем —
+       на 60 fps это заметная нагрузка на GC и на canvas-рендер Leaflet. */
+    let wavePoly = null, frontDot = null;
+    function drawFrame(fr){
+      const upto = Math.min(sim.N, Math.max(2, Math.round(fr.front)));
+      if (upto > 1){
+        const lineTrim = sim.line.slice(0, upto + 1);
+        const wTrim = visWidths(fr.w.subarray(0, upto + 1), visFloor(h));
+        const pts = makeBandPolygon(chaikinSmooth(lineTrim, 2), wTrim, h.lat);
+        const depth = Math.min(1, fr.hmax / 15);
+        const style = {
+          color:'#ff3b3b', weight:1.5, opacity:0.85,
+          fill:'#ff5a5a', fillOpacity:0.26 + 0.22*depth
+        };
+        if (!wavePoly){
+          wavePoly = L.polygon(pts, Object.assign({ interactive:false }, style)).addTo(layerFlood);
+        } else {
+          wavePoly.setLatLngs(pts);
+          wavePoly.setStyle(style);
+        }
+        if (!frontDot){
+          frontDot = L.circleMarker(sim.line[upto], {
+            radius: 6, color:'#ff1a1a', weight:2.5, opacity:0.95,
+            fillColor:'#ff5a5a', fillOpacity:0.9, interactive:false
+          }).addTo(layerFlood);
+        } else frontDot.setLatLng(sim.line[upto]);
+      }
+      $('alertBanner').innerHTML =
+        `💥 ПРОРЫВ · t+${fmtClock(fr.t)} · фронт ${fmtNum(fr.front*sim.ds/1000,1)} км` +
+        ` · глубина до ${fmtNum(fr.hmax,1)} м · Q прорана ${fmtNum(fr.qsrc,0)} м³/с` +
+        (fr.pool > 0.05 ? ` · вдхр −${fmtNum(sim.H0eff - fr.pool,1)} м` : ' · вдхр пусто');
+    }
+
+    function finishBreak(){
+      setTimeout(() => {
+        clear(layerFlood);
+        clear(layerFloodZone);
+        wavePoly = frontDot = null;
+        $('alertBanner').classList.remove('show');
+        S.damBreak = null;
+        $('details').innerHTML = detailsHTML(h);
+      }, REDUCED_MOTION ? 0 : 2600);
+    }
 
     let fi = 0;
     function step(tNow){
       if (!S.damBreak) return;
       const elapsed = (tNow - S.damBreak.start) / 1000;
       const tSim = Math.min(sim.simT, elapsed * (sim.simT / realDur));
-      S.damBreak.progress = Math.min(1, tSim / sim.simT);
+      S.damBreak.progress = Math.min(1, sim.simT ? tSim / sim.simT : 1);
       while (fi < sim.frames.length - 1 && sim.frames[fi+1].t <= tSim) fi++;
-      const fr = sim.frames[fi];
-      clear(layerFlood);
-      const upto = Math.min(sim.N, Math.max(2, Math.round(fr.front)));
-      if (upto > 1){
-        const lineTrim = sim.line.slice(0, upto + 1);
-        const wTrim = Array.from(visWidths(fr.w.slice(0, upto + 1), visFloor(h)));
-        const pts = makeBandPolygon(chaikinSmooth(lineTrim, 2), wTrim, h.lat);
-        const depth = Math.min(1, fr.hmax / 15);
-        polyAdd(layerFlood, pts, {
-          color:'#ff3b3b', weight:1.5, opacity:0.85,
-          fill:'#ff5a5a', fillOpacity:0.26 + 0.22*depth
-        });
-        try {
-          L.circleMarker(sim.line[upto], {
-            radius: 6, color:'#ff1a1a', weight:2.5, opacity:0.95,
-            fillColor:'#ff5a5a', fillOpacity:0.9, interactive:false
-          }).addTo(layerFlood);
-        } catch(e){ console.warn('front circle:', e.message); }
-      }
-      $('alertBanner').innerHTML =
-        `💥 ПРОРЫВ · t+${fmtT(fr.t)} · фронт ${(fr.front*sim.ds/1000).toFixed(1)} км` +
-        ` · глубина до ${fr.hmax.toFixed(1)} м · Q прорана ${fr.qsrc.toFixed(0)} м³/с` +
-        (fr.pool > 0.05 ? ` · вдхр −${(sim.H0eff - fr.pool).toFixed(1)} м` : ' · вдхр пусто');
+      drawFrame(sim.frames[fi]);
       render();
       if (tSim < sim.simT) requestAnimationFrame(step);
-      else setTimeout(() => {
-        clear(layerFlood);
-        clear(layerFloodZone);
-        $('alertBanner').classList.remove('show');
-        S.damBreak = null;
-        $('details').innerHTML = detailsHTML(h);
-      }, 2600);
+      else finishBreak();
     }
-    requestAnimationFrame(step);
+    if (REDUCED_MOTION){
+      /* просим не анимировать — показываем сразу финальный охват */
+      fi = sim.frames.length - 1;
+      drawFrame(sim.frames[fi]);
+      finishBreak();
+    } else {
+      requestAnimationFrame(step);
+    }
     return;
   }
 
@@ -1540,12 +1729,12 @@ async function startDamBreak(){
   setTimeout(() => {
     L.popup({ maxWidth: 220, autoPan: false, closeButton: false, className: 'breakPop' })
       .setLatLng([h.lat, h.lon])
-      .setContent(`<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>Длина волны: <b>${(courseLength(course)/1000).toFixed(1)} км</b>`)
+      .setContent(`<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>Длина волны: <b>${fmtNum(courseLength(course)/1000,1)} км</b>`)
       .openOn(map);
   }, 400);
   const duration = Math.max(12, params.baseDuration * 1.25);
   S.damBreak = { id:h.id, progress:0, start:performance.now(), duration, course };
-  $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${(courseLength(course)/1000).toFixed(0)} км вниз по течению` + (SHOW_DECORATIVE_WAVE?'':' · волна не отрисовывается');
+  $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${fmtNum(courseLength(course)/1000,0)} км вниз по течению` + (SHOW_DECORATIVE_WAVE?'':' · волна не отрисовывается');
   $('alertBanner').classList.add('show');
 
   recompute(); render();
@@ -1682,10 +1871,25 @@ function buildUI(){
   const list = $('hppList');
   $('hppCount').textContent = `(${HPPS.length})`;
 
-  /* Кнопка ⟳: сбросить кэш данных и перезагрузить страницу за свежими данными */
+  /* Штамп сборки — из version.js, а не из текста вперемешку с кодом:
+     раньше в index.html и в sw.js версии «v45» жили раздельно и разъезжались. */
+  const stamp = $('buildStampVer');
+  if (stamp) stamp.textContent = window.APP_VERSION || 'dev';
+
+  /* Кнопка ⟳: сбросить ВСЕ локальные кэши (данные, русла, контуры) и shell SW.
+     Раньше чистился только ges_cache_*, и «залипшие» русла/контуры OSM
+     оставались в localStorage навечно (TTL у них 30 суток). */
   $('refreshBtn').onclick = async () => {
     setStatus('очистка кэша…');
-    try { localStorage.removeItem(CACHE_KEY); } catch(e){}
+    try {
+      const kill = [];
+      for (let i = 0; i < localStorage.length; i++){
+        const k = localStorage.key(i);
+        if (k && (k.startsWith('ges_'))) kill.push(k);
+      }
+      kill.forEach(k => localStorage.removeItem(k));
+    } catch(e){}
+    invalidateCacheSnapshot();
     try {
       if ('caches' in window){
         const ks = await caches.keys();
@@ -1694,52 +1898,60 @@ function buildUI(){
     } catch(e){}
     location.reload();
   };
+
   HPPS.forEach(h => {
-    const item = document.createElement('div');
+    /* <button> вместо <div onclick>: список становился доступным мышью;
+       теперь станции переключаются с клавиатуры и читаются скринридером */
+    const item = document.createElement('button');
+    item.type = 'button';
     item.className = 'hppItem';
     item.dataset.id = h.id;
-    item.innerHTML = `<div class="src loading"></div><div class="nm">${h.name}</div><div class="mw">…</div>`;
+    item.setAttribute('aria-pressed', 'false');
+    item.setAttribute('aria-label', `${h.name}, река ${h.river}, ${capLabel(h)}`);
+    item.innerHTML = `<span class="src loading" aria-hidden="true"></span><span class="nm">${h.name}</span><span class="mw">…</span>`;
     item.onclick = () => selectHPP(h.id, true);
     list.appendChild(item);
     createMarker(h);
   });
+  buildColorLegend();
   updateStationAvailability();
 
   $('slider').oninput = e => { S.idx = +e.target.value; render(); };
   $('playBtn').onclick = togglePlay;
 
-  document.querySelectorAll('.scenBtn').forEach(btn => {
+  /* Панели на узких экранах складываются в выдвижные — иначе на телефоне
+     нечем выбирать станцию и не видно графиков (раньше display:none). */
+  const toggles = [
+    ['panelToggle', 'sidebar'],
+    ['chartToggle', 'chartPanel']
+  ];
+  toggles.forEach(([btnId, panelId]) => {
+    const btn = $(btnId);
+    if (!btn) return;
     btn.onclick = () => {
-      const sc = btn.dataset.scen;
-      document.querySelectorAll('.scenBtn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      if (sc === 'reset'){
-        stopDamBreak(); stopRelease();
-        S.scenario = 'normal';
-        document.querySelector('.scenBtn[data-scen="normal"]').classList.add('active');
-        recompute(); render();
-        updateStationAvailability();
-        if (S.selected){
-          const h = HPPS.find(x => x.id === S.selected);
-          $('details').innerHTML = detailsHTML(h);
-          updateChart();
-        }
-        return;
-      }
-      if (sc === 'dam_break'){ stopRelease(); S.scenario = 'dam_break'; startDamBreak(); }
-      else if (sc === 'release'){ stopDamBreak(); S.scenario = 'release'; startRelease(); }
-      else {
-        stopDamBreak(); stopRelease();
-        S.scenario = sc;
-        recompute(); render();
-        updateStationAvailability();
-        if (S.selected){
-          const h = HPPS.find(x => x.id === S.selected);
-          $('details').innerHTML = detailsHTML(h);
-          updateChart();
-        }
-      }
+      const panel = $(panelId);
+      const open = panel.classList.toggle('open');
+      btn.classList.toggle('on', open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open && panelId === 'chartPanel') panel.classList.add('show');
+      if (panelId === 'chartPanel') setTimeout(() => { updateChart(); }, 60);
     };
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    ['sidebar','chartPanel'].forEach(id => {
+      const el = $(id);
+      if (el && el.classList.contains('open')){
+        el.classList.remove('open');
+        const b = $(id === 'sidebar' ? 'panelToggle' : 'chartToggle');
+        if (b){ b.classList.remove('on'); b.setAttribute('aria-expanded','false'); }
+      }
+    });
+  });
+
+  /* Сценарии */
+  document.querySelectorAll('.scenBtn').forEach(btn => {
+    btn.onclick = () => applyScenario(btn.dataset.scen);
   });
 
   /* При активном сценарии «Сброс» доступна только Перовская — остальные станции блокируются */
@@ -1747,74 +1959,123 @@ function buildUI(){
     const isRelease = S.scenario === 'release';
     document.querySelectorAll('.hppItem').forEach(el => {
       const isPero = el.dataset.id === 'pero';
-      if (isRelease && !isPero){
-        el.classList.add('disabled');
-        el.style.opacity = '0.45';
-        el.style.pointerEvents = 'none';
-        el.title = 'Сценарий сброса активен только для Перовской МГЭС';
-      } else {
-        el.classList.remove('disabled');
-        el.style.opacity = '';
-        el.style.pointerEvents = '';
-        el.title = '';
-      }
+      const off = isRelease && !isPero;
+      el.classList.toggle('disabled', off);
+      el.disabled = off;                    // вместо танца со style.opacity/pointerEvents
+      el.title = off ? 'Сценарий сброса активен только для Перовской МГЭС' : '';
     });
     /* Сценарии: при сбросе доступны только Норма, Сброс и Сброс настроек */
     document.querySelectorAll('.scenBtn').forEach(b => {
-      if (isRelease && b.dataset.scen !== 'normal' && b.dataset.scen !== 'reset' && b.dataset.scen !== 'release'){
-        b.style.opacity = '0.45';
-        b.style.pointerEvents = 'none';
-      } else {
-        b.style.opacity = '';
-        b.style.pointerEvents = '';
-      }
+      const off = isRelease && b.dataset.scen !== 'normal' && b.dataset.scen !== 'reset' && b.dataset.scen !== 'release';
+      b.disabled = off;
+      b.setAttribute('aria-pressed', b.classList.contains('active') ? 'true' : 'false');
     });
   }
 
-  const baseOpts = {
-    type:'line', maintainAspectRatio:false, animation:false,
-    interaction:{ mode:'index', intersect:false },
-    elements:{ point:{ radius:0 } },
-    plugins:{
-      legend:{ display:false },
-      tooltip:{
-        backgroundColor:'rgba(16,22,30,.95)', borderColor:'#2a3644', borderWidth:1,
-        titleColor:'#dbe6f2', bodyColor:'#dbe6f2', padding:8, font:{size:11}
-      }
-    },
-    scales:{
-      x:{ display:false, ticks:{ color:'#6d8199', maxTicksLimit:6, font:{size:8} }, grid:{ color:'rgba(255,255,255,.04)' } },
-      y:{ position:'left', ticks:{ color:'#dbe6f2', font:{size:9} }, grid:{ color:'rgba(255,255,255,.05)' },
-        title:{ display:true, color:'#8ba0b6', font:{size:10} } }
-    }
-  };
-  const cp = $('chartPowerC').getContext('2d');
-  S.chartPower = new Chart(cp, Object.assign({}, baseOpts, {
-    data:{ labels:[], datasets:[] },
-    options: Object.assign({}, baseOpts, { plugins: Object.assign({}, baseOpts.plugins, { tooltip:{ enabled:false } }),
-      scales: Object.assign({}, baseOpts.scales, { y: Object.assign({}, baseOpts.scales.y, { title:{ display:true, text:'Мощность' } }) }) })
-  }));
-  const cl = $('chartLevelC').getContext('2d');
-  S.chartLevel = new Chart(cl, Object.assign({}, baseOpts, {
-    data:{ labels:[], datasets:[] },
-    options: Object.assign({}, baseOpts, {
-      scales: Object.assign({}, baseOpts.scales, {
-        x: Object.assign({}, baseOpts.scales.x, { display:true }),
-        y: Object.assign({}, baseOpts.scales.y, { title:{ display:true, text:'Уровень ВБ, м' } })
-      })
-    })
-  }));
+  /* Единая точка применения сценария: раньше «выключить анимации, пересчитать,
+     перерисовать, обновить паспорт» было продублировано в трёх ветках,
+     и кнопка «Сброс настроек» оставалась подсвеченной вместе с «Нормой». */
+  function applyScenario(sc){
+    const isReset = sc === 'reset';
+    if (isReset) S.scenario = 'normal';
+    else if (sc === S.scenario && sc !== 'dam_break' && sc !== 'release') return;
+    else S.scenario = sc;
 
+    /* анимации чужих сценариев глушим всегда, перед переходом */
+    if (S.scenario !== 'dam_break') stopDamBreak();
+    if (S.scenario !== 'release') stopRelease();
+
+    document.querySelectorAll('.scenBtn').forEach(b => {
+      const on = b.dataset.scen === S.scenario;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    recompute(); render();
+    updateStationAvailability();
+    if (S.selected){
+      const h = HPPS.find(x => x.id === S.selected);
+      if (h && S.scenario !== 'release') $('details').innerHTML = detailsHTML(h);
+      updateChart();
+    }
+    if (S.scenario === 'dam_break') startDamBreak();
+    else if (S.scenario === 'release') startRelease();
+  }
+
+  /* Легенда цветов меток: без неё «красный/зелёный» — чистая догадка,
+     а для пользователя с КЦМ цветовая шкала вообще не информация. */
+  function buildColorLegend(){
+    const box = $('legend');
+    if (!box) return;
+    const scale = [['>75%', '#3ddc84'], ['45–75%', '#a8e05f'], ['20–45%', '#ffb02e'], ['5–20%', '#ff8a3d'], ['<5%', '#ff6b6b']];
+    box.innerHTML = '<span class="lgTitle">загрузка</span>' +
+      scale.map(([t,c]) => `<span class="lgItem"><i style="background:${c}"></i>${t}</span>`).join('') +
+      '<span class="lgItem"><i style="background:#ff3b3b;box-shadow:0 0 0 2px #fff"></i>прорыв / перелив</span>' +
+      '<span class="lgItem"><i style="background:#555"></i>нет данных</span>';
+  }
+
+  /* Опции ГЕНЕРИРУЮТСЯ отдельно на каждый график. Раньше был один общий
+     baseOpts, и оба Chart получали ссылки на одни и те же вложенные
+     объекты (scales.x, plugins.legend): правка cp.options.scales.x…
+     незаметно меняла второй график. */
+  function chartOptions(kind){
+    const power = kind === 'power';
+    return {
+      type:'line', maintainAspectRatio:false, animation:false,
+      interaction:{ mode:'index', intersect:false },
+      elements:{ point:{ radius:0 } },
+      plugins:{
+        legend:{ display:false },
+        /* подсказка была отключена на графике мощности — при этом
+           updateChart() каждый кадр готовил для неё fmtAxisPower() */
+        tooltip:{
+          enabled:true, mode:'index', intersect:false,
+          backgroundColor:'rgba(16,22,30,.95)', borderColor:'#2a3644', borderWidth:1,
+          titleColor:'#dbe6f2', bodyColor:'#dbe6f2', padding:8, font:{size:11},
+          callbacks:{ label: ctx => power
+            ? fmtAxisPower(ctx.parsed.y)
+            : fmtNum(ctx.parsed.y, 2) + ' м' }
+        }
+      },
+      scales:{
+        x:{ display:!power, ticks:{ color:'#6d8199', maxTicksLimit:6, font:{size:8} }, grid:{ color:'rgba(255,255,255,.04)' } },
+        y:{ position:'left', ticks:{ color:'#dbe6f2', font:{size:9} }, grid:{ color:'rgba(255,255,255,.05)' },
+          title:{ display:true, color:'#8ba0b6', font:{size:10}, text: power ? 'Мощность' : 'Уровень ВБ, м' } }
+      }
+    };
+  }
+  const cpCtx = $('chartPowerC').getContext('2d');
+  S.chartPower = new Chart(cpCtx, { data:{ labels:[], datasets:[] }, options: chartOptions('power') });
+  const clCtx = $('chartLevelC').getContext('2d');
+  S.chartLevel = new Chart(clCtx, { data:{ labels:[], datasets:[] }, options: chartOptions('level') });
+
+  /* Режимы: тот же «один объект на всех» был в обработчиках — плюс aria
+     для переключателя (роль tablist без aria-selected скринридером
+     читается как три никаких не связанных кнопки). */
   document.querySelectorAll('#modeTabs button').forEach(btn => {
     btn.onclick = async () => {
       if (S.loading) return;
-      document.querySelectorAll('#modeTabs button').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
+      document.querySelectorAll('#modeTabs button').forEach(b => {
+        const on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
       S.mode = btn.dataset.mode;
       stopDamBreak(); stopRelease();
       S.scenario = 'normal';
-      document.querySelectorAll('.scenBtn').forEach(b => b.classList.toggle('active', b.dataset.scen === 'normal'));
-      await loadPeriod(S.mode);
+      document.querySelectorAll('.scenBtn').forEach(b => {
+        const on = b.dataset.scen === 'normal';
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      updateStationAvailability();
+      try { await loadPeriod(S.mode); }
+      catch(e){ console.error('loadPeriod ' + S.mode + ':', e); }
+    };
+    btn.onkeydown = e => {
+      const tabs = [...document.querySelectorAll('#modeTabs button')];
+      const at = tabs.indexOf(btn);
+      const to = e.key === 'ArrowRight' ? tabs[at+1] : e.key === 'ArrowLeft' ? tabs[at-1] : null;
+      if (to){ e.preventDefault(); to.focus(); to.click(); }
     };
   });
 }
@@ -1822,39 +2083,53 @@ function buildUI(){
 /* ============================================================
    РЕНДЕР
    ============================================================ */
+/* Цвет метки по загрузке; для «Иглы» (capacityMW = 0) lf теперь 0, а не NaN. */
+function markerColor(h, r, i){
+  const broken = (S.scenario === 'dam_break' && S.selected === h.id);
+  if (broken || r.level[i] > h.nmu - 0.15) return '#ff3b3b';
+  const lf = r.lf[i];
+  return lf>0.75?'#3ddc84':lf>0.45?'#a8e05f':lf>0.20?'#ffb02e':lf>0.05?'#ff8a3d':'#ff6b6b';
+}
+
 function render(){
   const i = S.idx;
   if (!S.dates[i]) return;
-  $('dateBox').textContent = S.dates[i].split('-').reverse().join('.');
+  $('dateBox').textContent = fmtDateRu(S.dates[i]);
   $('slider').value = i;
 
   HPPS.forEach(h => {
-    const r = S.results[h.id];
     const mk = S.markers[h.id];
     if (!mk) return;
-    if (!r){
+    const r = S.results[h.id];
+    const k = ki(h);                       // индекс ряда станции под ЭТУ дату
+    if (!r || k < 0){
       mk.setStyle({ fillColor:'#555', color:'#ffffff', weight:2.5, opacity:0.7, fillOpacity:0.7 });
       return;
     }
-    const lf = r.lf[i], lvl = r.level[i];
-    const overtop = lvl > h.nmu - 0.15;
-    const isBroken = (S.scenario === 'dam_break' && S.selected === h.id);
     let col;
-    if (isBroken || overtop) col = '#ff3b3b';
-    else col = lf>0.75?'#3ddc84':lf>0.45?'#a8e05f':lf>0.20?'#ffb02e':lf>0.05?'#ff8a3d':'#ff6b6b';
-    mk.setStyle({ fillColor: col, color:'#ffffff', weight:2.5, opacity:1, fillOpacity:1 });
-    mk.bindPopup(popupHTML(h, r, i, col, isBroken, overtop), { maxWidth: 330 });
+    try {
+      col = markerColor(h, r, k);
+      mk.setStyle({ fillColor: col, color:'#ffffff', weight:2.5, opacity:1, fillOpacity:1 });
+      /* Открытый попап обновляем точечно — один станция, а не шесть */
+      const pop = mk.getPopup && mk.getPopup();
+      if (pop && pop.isOpen()) pop.setContent(popupHTML(h, r, k, col));
+    } catch(e){
+      /* Одна битая станция не должна обрывать отрисовку остальных */
+      console.warn('render ' + h.id + ':', e.message);
+      mk.setStyle({ fillColor:'#555', opacity:0.7, fillOpacity:0.7 });
+    }
   });
 
   if (S.selected){
     const h = HPPS.find(x => x.id === S.selected);
-    const r = S.results[h.id];
-    if (r){
+    const r = h && S.results[h.id];
+    const k = h ? ki(h) : -1;
+    if (r && k >= 0){
       const isBroken = (S.scenario === 'dam_break' && S.selected === h.id);
       if (isBroken){
         if (S.reservoirs[h.id]){ layerRes.removeLayer(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
       } else {
-        drawReservoir(h, i, r.lf[i], r.level[i] > h.nmu - 0.15);
+        drawReservoir(h, k, r.lf[k], r.level[k] > h.nmu - 0.15);
       }
     }
     Object.keys(S.reservoirs).forEach(id => {
@@ -1865,15 +2140,13 @@ function render(){
   if (S.selected) updateChart();
 }
 
-function fmtMW(v){
-  if (!v) return '0 МВт';
-  return v >= 1 ? v.toFixed(0)+' МВт' : (v*1000).toFixed(0)+' кВт';
-}
 function capLabel(h){
-  return h.powerLabel ? h.powerLabel : ((h.capacityMW || 0) + ' МВт');
+  return h.powerLabel ? h.powerLabel : (fmtNum(h.capacityMW || 0, h.capacityMW >= 1 ? 0 : 2) + ' МВт');
 }
-function popupHTML(h, r, i, col, isBroken, overtop){
-  const P = r.power[i], lf = r.lf[i]*100;
+function popupHTML(h, r, i, col){
+  const isBroken = (S.scenario === 'dam_break' && S.selected === h.id);
+  const overtop = r.level[i] > h.nmu - 0.15;
+  const lf = r.lf[i] * 100;
   const src = S.sources[h.id];
   const srcLabel = src==='api'?'🟢 онлайн':src==='cache'?'🟡 кэш':'🔴 офлайн';
   const status = isBroken ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">💥 ПЛОТИНА РАЗРУШЕНА</div>'
@@ -1881,13 +2154,14 @@ function popupHTML(h, r, i, col, isBroken, overtop){
   return `<h4>${h.name}</h4>
   <div style="color:#8ba0b6;margin-bottom:8px">р. ${h.river} · ${capLabel(h)} · ${srcLabel}</div>
   ${status}
-  <div class="kv"><span>Мощность</span><span style="color:${col};font-weight:700">${h.notHPP ? '—' : fmtMW(P)}</span></div>
-  <div class="kv"><span>Загрузка</span><span>${lf.toFixed(1)} %</span></div>
-  <div class="kv"><span>Уровень ВБ</span><span>${r.level[i].toFixed(2)} м</span></div>
-  <div class="kv"><span>Напор</span><span>${r.head[i].toFixed(1)} м</span></div>
-  <div class="kv"><span>Расход</span><span>${r.flow[i].toFixed(1)} м³/с</span></div>
-  <div class="kv"><span>Сброс</span><span>${r.spill[i].toFixed(1)} м³/с</span></div>
-  <div class="kv"><span>Зеркало</span><span>${r.area[i].toFixed(2)} км²</span></div>`;
+  <div class="kv"><span>Мощность</span><span style="color:${col};font-weight:700">${h.notHPP ? '—' : fmtMW(r.power[i])}</span></div>
+  <div class="kv"><span>Загрузка</span><span>${h.notHPP ? '—' : fmtNum(lf, 1) + ' %'}</span></div>
+  <div class="kv"><span>Уровень ВБ</span><span>${fmtNum(r.level[i], 2)} м</span></div>
+  <div class="kv"><span>Напор</span><span>${fmtNum(r.head[i], 1)} м</span></div>
+  <div class="kv"><span>Расход</span><span>${fmtNum(r.flow[i], 1)} м³/с</span></div>
+  <div class="kv"><span>Сброс</span><span>${fmtNum(r.spill[i], 1)} м³/с</span></div>
+  <div class="kv"><span>Зеркало</span><span>${fmtNum(r.area[i], 2)} км²</span></div>
+  <button type="button" class="popMore" data-id="${h.id}">Паспорт и график →</button>`;
 }
 
 /* ============================================================
@@ -1916,18 +2190,24 @@ async function selectHPP(id, fromList){
 
   if (!S.cache[S.mode]?.[id] && !S.loadingStation[id] && apiAvailable !== false){
     S.loadingStation[id] = true;
-    const item = document.querySelector(`.hppItem[data-id="${id}"]`);
-    if (item) item.querySelector('.src').className = 'src loading';
-    const { data, source } = await loadStation(h, S.mode);
-    S.cache[S.mode][id] = data;
-    S.sources[id] = source;
-    S.results[id] = simulate(h, data.hydro, data.clim);
-    delete S.loadingStation[id];
-    if (item){
-      item.querySelector('.src').className = 'src ' + source;
-      item.querySelector('.mw').textContent = capLabel(h);
+    hppRowSet(id, 'loading');
+    const mode = S.mode;
+    let res;
+    try {
+      res = await loadStation(h, mode);
+    } catch(e){
+      /* Ошибка сети не должна оставлять станцию навеки в состоянии
+         «загрузка» (флаг снимается, точка краснеет — дальше работает ретрай) */
+      delete S.loadingStation[id];
+      hppRowSet(id, 'synth', capLabel(h));
+      console.warn('loadStation ' + h.name + ':', e.message);
+      return;
     }
-    if (!S.dates.length){ S.dates = data.hydro.time; updateTimeline(S.mode); }
+    delete S.loadingStation[id];
+    if (S.mode !== mode) return;      // режим сменили, пока шёл запрос
+    setStationSeries(h, mode, res.data, res.source);
+    hppRowSet(id, res.source, capLabel(h));
+    syncAxis(mode, true);
     recompute(); render();
   }
 
@@ -1956,8 +2236,8 @@ async function selectHPP(id, fromList){
 
 function detailsHTML(h){
   const r = S.results[h.id];
-  if (!r) return `<h3>${h.name}</h3><p style="color:#8ba0b6">Данные загружаются…</p>`;
-  const i = S.idx;
+  const i = ki(h);
+  if (!r || i < 0) return `<h3>${h.name}</h3><p style="color:#8ba0b6">Данные загружаются…</p>`;
   const isBroken = (S.scenario === 'dam_break' && S.selected === h.id);
   const overtop = r.level[i] > h.nmu - 0.15;
   const src = S.sources[h.id];
@@ -1967,7 +2247,7 @@ function detailsHTML(h){
   const wp = getWaveParams(h);
   const course = S.riverCourses[h.id];
   const courseInfo = course
-    ? `русло: ${Math.round(courseLength(course)/1000)} км`
+    ? `русло: ${fmtNum(courseLength(course)/1000, 1)} км`
     : (S.loadingRiver[h.id] ? 'русло загружается…' : 'русло не загружено');
   const gg = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
   const resEmbedded = !!(gg && (Array.isArray(gg) ? gg.length : (gg.n && gg.n.length)));
@@ -1977,6 +2257,15 @@ function detailsHTML(h){
       ? (S.reservoirsOSM[h.id].length ? `водохранилище: ${S.reservoirsOSM[h.id].length} объектов OSM` : 'водохранилище: фолбэк')
       : (S.loadingRes[h.id] ? 'водохранилище загружается…' : 'водохранилище: фолбэк');
 
+  /* Провенанс: Open-Meteo считает реку по сетке 0.1° и это ГИДРОЛОГИЧЕСКАЯ
+     МОДЕЛЬ (CAMS), а не створ у плотины. Для прудов 0,1-0,6 МВт это
+     видно глазами — молча приписывать ряду статус «расход реки» нельзя. */
+  const meta = (S.cache[S.mode]?.[h.id] || {}).meta;
+  const prov = meta && meta.latitude != null
+    ? `ряд: Open-Meteo flood${meta.model ? ' ('+meta.model+')' : ''}, ячейка сетки ${fmtNum(meta.latitude,3)}, ${fmtNum(meta.longitude,3)}${meta.grid_code ? ' · ' + meta.grid_code + '°' : ''}`
+    : (S.mode === 'climate' ? 'ряд: ' + ((meta && meta.model) || 'CMIP6 ens-mean SSP5-8.5') + ', шаг — месяц'
+                            : 'ряд: локальная синтетика (офлайн-фолбэк), шаг — сутки');
+
   return `<h3>${h.name}</h3>
   <div style="font-size:11px;margin-bottom:6px">${srcLabel}</div>
   ${isBroken ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">💥 ПЛОТИНА РАЗРУШЕНА</div>' : ''}
@@ -1984,46 +2273,27 @@ function detailsHTML(h){
   <div class="kv"><span>Река</span><span>${h.river}</span></div>
   <div class="kv"><span>Водохранилище</span><span>${h.reservoirName || '—'}</span></div>
   ${h.resCoords ? `<div class="kv"><span>Координаты вдхр</span><span>${h.resCoords}</span></div>` : ''}
-  <div class="kv"><span>Координаты плотины</span><span>${h.lat.toFixed(4)}, ${h.lon.toFixed(4)}</span></div>
+  <div class="kv"><span>Координаты плотины</span><span>${fmtNum(h.lat,4)}, ${fmtNum(h.lon,4)}</span></div>
   <div class="kv"><span>Течение (flowDir)</span><span>${h.flowDir}°</span></div>
   <div class="kv"><span>Установленная мощность</span><span>${capLabel(h)}</span></div>
   <div class="kv"><span>Тип плотины</span><span>${h.damType || '—'}</span></div>
-  <div class="kv"><span>Расчётный напор</span><span>${h.head} м</span></div>
+  <div class="kv"><span>Расчётный напор</span><span>${fmtNum(h.head,1)} м</span></div>
   ${h.note ? `<div class="kv"><span>Примечание</span><span style="color:#ffb02e">${h.note}</span></div>` : ''}
-  <div class="kv"><span>НПУ / УМО</span><span>${h.nmu} / ${h.umo} м</span></div>
-  <div class="kv ${overtop?'danger':''}"><span>Текущий уровень</span><span>${r.level[i].toFixed(2)} м</span></div>
+  <div class="kv"><span>НПУ / УМО</span><span>${fmtNum(h.nmu,1)} / ${fmtNum(h.umo,1)} м</span></div>
+  <div class="kv"><span>Дата ряда</span><span>${fmtDateRu(S.dates[S.idx])}</span></div>
+  <div class="kv ${overtop?'danger':''}"><span>Текущий уровень</span><span>${fmtNum(r.level[i],2)} м</span></div>
   <div class="kv ${overtop?'danger':''}"><span>Текущая мощность</span><span>${h.notHPP ? '—' : fmtMW(r.power[i])}</span></div>
-  <div class="kv"><span>Выработка</span><span>${r.kwh/1e9 >= 0.05 ? (r.kwh/1e9).toFixed(1)+' млрд кВт·ч' : (r.kwh/1e6).toFixed(0)+' млн кВт·ч'}</span></div>
+  <div class="kv"><span>Выработка за период</span><span>${fmtEnergyKWh(r.kwh)}</span></div>
   <div style="margin-top:8px;padding:8px 10px;background:rgba(255,59,59,.08);border:1px solid rgba(255,59,59,.25);border-radius:8px;font-size:11px;line-height:1.5">
     <div style="color:#ff6b6b;font-weight:700;margin-bottom:4px">🌊 Волна прорыва — ${wp.type}</div>
     <div>${wp.description}</div>
-    <div style="color:#8ba0b6;margin-top:4px">скорость ≈ ${wp.speedMs} м/с · ширина до ${(wp.maxWidth/1000).toFixed(1)} км</div>
+    <div style="color:#8ba0b6;margin-top:4px">скорость ≈ ${fmtNum(wp.speedMs,0)} м/с · ширина до ${fmtNum(wp.maxWidth/1000,1)} км</div>
     ${(typeof RIVER_ELEV !== 'undefined' && RIVER_ELEV[h.id]) ?
-      `<div style="color:#39d353;margin-top:4px">∿ расчёт: профиль дна DEM, водосливная кривая прорана, n=0.035</div>` : ''}
+      `<div style="color:#39d353;margin-top:4px">∿ расчёт: профиль дна DEM, водосливная кривая прорана, Мэннинг n=${fmtNum(MANNING_N,3)}</div>` : ''}
     <div style="color:#8ba0b6;margin-top:2px;font-size:10px">${courseInfo}</div>
     <div style="color:#8ba0b6;font-size:10px">${resInfo}</div>
+    <div style="color:#6d8199;font-size:10px;margin-top:2px">${prov}</div>
   </div>`;
-}
-
-function fmtAxisPower(v){
-  if (!v) return '0 кВт';
-  return v >= 1 ? v.toFixed(0)+' МВт' : (v*1000).toFixed(0)+' кВт';
-}
-
-/* Скользящее среднее — убирает резкие скачки на циклических графиках
-   климатического режима (заполнение-слив водохранилища по месяцам). */
-function movingAverage(data, win){
-  if (!win || win < 2) return data.slice();
-  const out = [];
-  const half = Math.floor(win/2);
-  for (let i=0;i<data.length;i++){
-    let s=0, c=0;
-    for (let j=Math.max(0,i-half); j<=Math.min(data.length-1,i+half); j++){
-      s += data[j]; c++;
-    }
-    out.push(s/c);
-  }
-  return out;
 }
 
 function updateChart(){
@@ -2037,31 +2307,51 @@ function updateChart(){
   const r = S.results[S.selected];
   const h = HPPS.find(x => x.id === S.selected);
   if (!r || !h) return;
+  const len = S.timeLen[h.id] || r.level.length;
+  if (!len) return;
 
+  /* Окно берём по единой оси дат, а значения — по ДАТЕ каждого окна.
+     Прямое r.power[k] ломалось на станции с рядом другой длины
+     (месячный климат против суточной истории): getMonth() индексы
+     расходились, и график рисовал «дырки»/чужие точки. */
   const i = S.idx, W = CHART_WINDOW;
   const a = Math.max(0, i-W), b = Math.min(S.dates.length, i+W);
   const labels=[], pw=[], lv=[];
-  for (let k=a;k<b;k++){
-    labels.push(S.dates[k].slice(5));
-    pw.push(+r.power[k].toFixed(2));
-    lv.push(+r.level[k].toFixed(2));
+  for (let k = a; k < b; k++){
+    const rk = alignIndex(k, len, S.timeIdx[h.id], S.dates[k]);
+    if (rk < 0) continue;
+    labels.push(chartTickLabel(S.dates[k], a, b));
+    pw.push(r.power[rk]);
+    lv.push(r.level[rk]);
   }
+  if (!labels.length) return;
 
   const cp = S.chartPower;
   const cl = S.chartLevel;
-  /* Сглаживаем данные, чтобы график не скакал вертикально в режиме климата */
-  const pwS = movingAverage(pw, 5);
-  const lvS = movingAverage(lv, 5);
+  /* Сглаживание нужно месячному климат-ряду: заполнение-слив скачет
+     от месяца к месяцу и глаз не цепляется за тренд. */
+  const win = S.mode === 'climate' ? 5 : 1;
+  const pwS = movingAverage(pw, win).map(v => Math.round(v*100)/100);
+  const lvS = movingAverage(lv, win).map(v => Math.round(v*100)/100);
+  const idxMark = Math.max(0, Math.min(i - a, labels.length - 1));
+
   cp.data.labels = labels;
   cp.data.datasets = [{
-    data:pwS, borderColor:'#31c9ff', backgroundColor:'rgba(49,201,255,.06)',
+    data:pwS, borderColor:'#31c9ff', backgroundColor:'rgba(49,224,255,.06)',
     borderWidth:1.6, fill:false, tension:.15,
+    pointRadius: labels.map((_,j) => j === idxMark ? 3 : 0),
+    pointBackgroundColor:'#ffffff'
   }];
-  cp.options.scales.y.title.text = h.notHPP ? 'Мощность — нет ГЭС' : 'Мощность';
-  cp.options.plugins.tooltip.callbacks = {
-    label: ctx => fmtAxisPower(ctx.parsed.y) + (h.notHPP?' (нет ГЭС)':'')
-  };
-  /* Фиксированный вертикальный масштаб мощности — линия не касется краёв графика */
+  cp.options.scales.y.title.text = h.notHPP ? 'нет ГЭС' : 'Мощность';
+  cp.options.scales.x.display = false;
+  cp.options.plugins.legend.display = false;
+  const lblP = $('chartLabelPower'), lblL = $('chartLabelLevel');
+  if (lblP) lblP.textContent = (h.notHPP ? 'мощность не вырабатывается' : 'мощность, МВт') +
+    (S.scenario === 'flood' ? ' · сценарий: паводок (весенний разбор по календарю)'
+     : S.scenario === 'drought' ? ' · сценарий: летняя межень' : '');
+  if (lblL) lblL.textContent = 'уровень водохранилища, м (НПУ ' + fmtNum(h.nmu,1) + ' · УМО ' + fmtNum(h.umo,1) + ')';
+  cp.options.scales.y.ticks.callback = v => fmtAxisPower(+v);
+  /* Фиксированный вертикальный масштаб — линия не липнет к краям графика */
   const pMax = Math.max(h.capacityMW || 0, ...pw) * 1.15;
   cp.options.scales.y.min = 0;
   cp.options.scales.y.max = pMax > 0 ? pMax : 1;
@@ -2071,17 +2361,27 @@ function updateChart(){
   cl.data.datasets = [{
     data:lvS, borderColor:'#ffb02e', backgroundColor:'rgba(255,176,46,.06)',
     borderWidth:1.6, fill:false, tension:.15,
+    pointRadius: labels.map((_,j) => j === idxMark ? 3 : 0),
+    pointBackgroundColor:'#ffffff'
   }];
   cl.options.scales.y.title.text = 'Уровень ВБ, м';
-  /* Фиксированный вертикальный масштаб уровня: umo..nmu с отступом ±0.5 м */
+  cl.options.scales.y.ticks.callback = v => fmtNum(+v, 1);
   const lMin = (h.umo != null ? h.umo : Math.min(...lvS)) - 0.5;
   const lMax = (h.nmu != null ? h.nmu : Math.max(...lvS)) + 0.5;
   cl.options.scales.y.min = lMin;
-  cl.options.scales.y.max = lMax;
-  cl.options.plugins.tooltip.callbacks = {
-    label: ctx => ctx.parsed.y.toFixed(2)+' м'
-  };
+  cl.options.scales.y.max = Math.max(lMax, lMin + 0.5);
+  cl.options.plugins.tooltip.callbacks.label = ctx => fmtNum(ctx.parsed.y, 2) + ' м';
   cl.update('none');
+}
+
+/* Подпись даты на оси X: для суточных рядов — «дд.мм», для месячных
+   и длинных окон — «гггг-мм». */
+function chartTickLabel(iso, a, b){
+  const d0 = S.dates[a], d1 = S.dates[Math.min(b-1, S.dates.length-1)];
+  const spanDays = Math.abs((isoToUTC(d1) - isoToUTC(d0)) / 86400000);
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '');
+  if (!m) return String(iso || '');
+  return spanDays > 180 ? m[1].slice(2) + '-' + m[2] : m[2] + '.' + m[3];
 }
 
 /* ============================================================
@@ -2114,109 +2414,202 @@ function loop(t){
 /* ============================================================
    ПЕРЕТАСКИВАНИЕ ОКЕН МЫШКОЙ
    ============================================================ */
-function makeDraggable(element, handleSelector){
-  const el = $(element);
-  if(!el) return;  const handle = handleSelector ? el.querySelector(handleSelector) : el;
-  if(!handle) return;  el.classList.add('draggable');
-  handle.classList.add('draggable-handle');
+/* ============================================================
+   ПЕРЕТАСКИВАНИЕ И РЕСАЙЗ ОКОН
+   Панели «запоминаются» в localStorage и не могут уехать за край экрана:
+   раньше их можно было утащить в никуда, и вернуть только перезагрузкой.
+   Тащим только рабочие окна (список и графики) — статус, баннер и таймлайн
+   были drag-таргетами без всякого смысла и мешали обычным кликам.
+   ============================================================ */
+const LAYOUT_KEY = 'ges_layout_v1';
+const NARROW = () => window.matchMedia && window.matchMedia('(max-width:900px)').matches;
 
-  let isDragging=false, startX=0, startY=0, startLeft=0, startTop=0;
-
-  const onDown=(e)=>{
-    if(e.button!==0) return;
-    isDragging=true;
-    startX=e.clientX; startY=e.clientY;
-    const r=el.getBoundingClientRect();
-    startLeft=r.left; startTop=r.top;
-    el.style.right=''; el.style.bottom='';
-    el.style.position='absolute';
-    el.style.left=startLeft+'px'; el.style.top=startTop+'px';
-    el.style.zIndex='10000';
-    document.addEventListener('mousemove',onMove);
-    document.addEventListener('mouseup',onUp);
-    e.preventDefault();
+function saveLayout(id, box){
+  try {
+    const all = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
+    all[id] = box;
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(all));
+  } catch(e){}
+}
+function readLayout(){
+  try { return JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}'); } catch(e){ return {}; }
+}
+function clearLayout(id){
+  try {
+    const all = readLayout();
+    delete all[id];
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(all));
+  } catch(e){}
+}
+function clampBox(el, box){
+  const W = window.innerWidth, H = window.innerHeight;
+  const w = Math.min(Math.max(box.w || el.offsetWidth, 220), W - 16);
+  const h = Math.min(Math.max(box.h || el.offsetHeight, 140), H - 16);
+  return {
+    w, h,
+    left: Math.max(8 - w * 0.5, Math.min(box.left, W - w - 8 + w * 0.5)),
+    top:  Math.max(8 - h * 0.5, Math.min(box.top,  H - 24))
   };
-  const onMove=(e)=>{
-    if(!isDragging) return;
-    el.style.left=(startLeft+(e.clientX-startX))+'px';
-    el.style.top=(startTop+(e.clientY-startY))+'px';
-  };
-  const onUp=()=>{
-    isDragging=false;
-    document.removeEventListener('mousemove',onMove);
-    document.removeEventListener('mouseup',onUp);
-  };
-  handle.addEventListener('mousedown',onDown);
+}
+function applyLayout(id, el, box){
+  el.style.position = 'absolute';
+  el.style.right = 'auto'; el.style.bottom = 'auto';
+  el.style.left = Math.round(box.left) + 'px';
+  el.style.top  = Math.round(box.top) + 'px';
+  el.style.width = Math.round(box.w) + 'px';
+  el.style.height = Math.round(box.h) + 'px';
+  /* таймлайн подстроен под ширину сайдбара через CSS-переменную */
+  if (id === 'sidebar') document.documentElement.style.setProperty('--rail', Math.round(box.w) + 'px');
 }
 
-function makeResizable(element, minW=150, minH=100){
-  const el = $(element);
-  if(!el) return;
-  el.style.position='absolute';
-  ['tl','tr','bl','br'].forEach(pos=>{
-    const resizer = document.createElement('div');
-    resizer.className = 'resizer '+pos;
-    el.appendChild(resizer);
-    resizer.addEventListener('mousedown',e=>{
-      if(e.button!==0) return;
+function makeDraggable(id, handleSelector){
+  const el = $(id);
+  if (!el) return;
+  const handle = handleSelector ? el.querySelector(handleSelector) : el;
+  if (!handle) return;
+
+  handle.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || NARROW()) return;      // на узких экранах панели — ящики
+    e.preventDefault();
+    const r = el.getBoundingClientRect();
+    const dx = e.clientX - r.left, dy = e.clientY - r.top;
+    el.classList.add('dragging');
+    handle.setPointerCapture(e.pointerId);
+
+    const move = ev => {
+      const W = window.innerWidth, H = window.innerHeight;
+      const left = Math.min(Math.max(ev.clientX - dx, 8 - r.width * 0.4), W - r.width * 0.6);
+      const top  = Math.min(Math.max(ev.clientY - dy, 8), H - 48);
+      el.style.position = 'absolute';
+      el.style.right = 'auto'; el.style.bottom = 'auto';
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+      el.style.width = r.width + 'px';
+      el.style.height = r.height + 'px';
+    };
+    const up = () => {
+      el.classList.remove('dragging');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      const box = el.getBoundingClientRect();
+      const c = clampBox(el, { left: box.left, top: box.top, w: box.width, h: box.height });
+      applyLayout(id, el, c);
+      saveLayout(id, c);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+  });
+
+  /* двойной клик по заголовку — вернуть панель на место (единственный
+     «escape hatch», кроме ⟳, который раньше был только через reload) */
+  handle.addEventListener('dblclick', () => {
+    clearLayout(id);
+    el.style.position = ''; el.style.left = ''; el.style.top = '';
+    el.style.width = ''; el.style.height = ''; el.style.right = ''; el.style.bottom = '';
+    if (id === 'sidebar') document.documentElement.style.removeProperty('--rail');
+    if (S.chartPower) S.chartPower.resize();
+    if (S.chartLevel) S.chartLevel.resize();
+  });
+}
+
+function makeResizable(id, minW = 220, minH = 150){
+  const el = $(id);
+  if (!el) return;
+  ['tl','tr','bl','br'].forEach(pos => {
+    const grip = document.createElement('div');
+    grip.className = 'resizer ' + pos;
+    grip.setAttribute('aria-hidden', 'true');
+    el.appendChild(grip);
+    grip.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || NARROW()) return;
       e.preventDefault(); e.stopPropagation();
-      const cs=getComputedStyle(el);
-      let startW=parseFloat(cs.width)||el.offsetWidth;
-      let startH=parseFloat(cs.height)||el.offsetHeight;
-      let startL=parseFloat(cs.left)||el.offsetLeft;
-      let startT=parseFloat(cs.top)||el.offsetTop;
-      let sx=e.clientX, sy=e.clientY;
-      let dragging=true;
-      const onMove=(ev)=>{
-        if(!dragging) return;
-        const dx=ev.clientX-sx, dy=ev.clientY-sy;
-        if(pos.includes('tl')||pos.includes('bl')){
-          let nw=startW-dx;
-          let nL=startL+dx;
-          if(nw<minW){ nL+=nW-minW; nw=minW; }
-          el.style.left=nL+'px'; el.style.width=nw+'px';
-        } else {
-          el.style.width=Math.max(minW,startW+dx)+'px';
-        }
-        if(pos.includes('tl')||pos.includes('tr')){
-          let nh=startH-dy;
-          let nT=startT+dy;
-          if(nh<minH){ nT+=nh-minH; nh=minH; }
-          el.style.top=nT+'px'; el.style.height=nh+'px';
-        } else {
-          el.style.height=Math.max(minH,startH+dy)+'px';
-        }
+      const r = el.getBoundingClientRect();
+      const sx = e.clientX, sy = e.clientY;
+      grip.setPointerCapture(e.pointerId);
+
+      const move = ev => {
+        const dx = ev.clientX - sx, dy = ev.clientY - sy;
+        let { left, top, width, height } = { left:r.left, top:r.top, width:r.width, height:r.height };
+        if (pos.includes('r')) width  = Math.max(minW, r.width + dx);
+        if (pos.includes('l')) { width = Math.max(minW, r.width - dx); left = r.right - width; }
+        if (pos.includes('b')) height = Math.max(minH, r.height + dy);
+        if (pos.includes('t')) { height = Math.max(minH, r.height - dy); top = r.bottom - height; }
+        applyLayout(id, el, { left, top, w: width, h: height });
+        if (S.chartPower) S.chartPower.resize();
+        if (S.chartLevel) S.chartLevel.resize();
       };
-      const onUp=()=>{ dragging=false; document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp); };
-      document.addEventListener('mousemove',onMove);
-      document.addEventListener('mouseup',onUp);
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        const box = el.getBoundingClientRect();
+        const c = clampBox(el, { left: box.left, top: box.top, w: box.width, h: box.height });
+        applyLayout(id, el, c);
+        saveLayout(id, c);
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
     });
   });
 }
 
+function restoreWindows(){
+  const saved = readLayout();
+  ['sidebar','chartPanel'].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.querySelectorAll('.resizer').forEach(r => r.remove());
+    if (NARROW()){
+      el.style.position = ''; el.style.left = ''; el.style.top = '';
+      el.style.width = ''; el.style.height = '';
+      return;
+    }
+    const box = saved[id];
+    if (box) applyLayout(id, el, clampBox(el, box));
+  });
+}
+
 function makeWindowsDraggable(){
-  ['sidebar','chartPanel'].forEach(id=>{
-    const el=$(id);
-    if(el){
-      el.querySelectorAll('.resizer').forEach(r=>r.remove());
-      el.style.position='absolute';
+  restoreWindows();
+  makeDraggable('sidebar', '.drag-handle');
+  makeResizable('sidebar', 240, 240);
+  makeDraggable('chartPanel', '.drag-handle');
+  makeResizable('chartPanel', 280, 180);
+  /* смена размера окна / поворот телефона — пересобрать раскладку */
+  let t = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(t);
+    t = setTimeout(() => { restoreWindows(); map.invalidateSize(); }, 180);
+  });
+}
+
+/* Глобальные обработчики, которые не привязаны к конкретной панели */
+function bindGlobalHandlers(){
+  /* «Паспорт и график →» внутри leaflet-попапа: содержимое попапа пересоздаётся,
+     поэтому вешать handler на кнопку нельзя — только делегирование на document */
+  document.addEventListener('click', e => {
+    const btn = e.target.closest && e.target.closest('.popMore');
+    if (!btn) return;
+    const box = $('details');
+    box.scrollIntoView({ behavior: REDUCED_MOTION ? 'auto' : 'smooth', block:'nearest' });
+    const item = hppRow(btn.dataset.id);
+    if (item) item.focus();
+  });
+
+  /* Пробел — плей/пауза, если фокус не в поле ввода; Esc уже закрыт в buildUI */
+  document.addEventListener('keydown', e => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+    if (e.code === 'Space' && !e.target.closest('button')){
+      e.preventDefault();
+      togglePlay();
     }
   });
-  makeDraggable('sidebar','header:first-of-type');
-  makeResizable('sidebar', 200, 200);
-  makeDraggable('chartPanel','.head');
-  makeResizable('chartPanel', 250, 150);
-  makeDraggable('topbar');
-  makeDraggable('timeline');
-  makeDraggable('alertBanner');
-  makeDraggable('statusBar');
 }
 
 (async function boot(){
   buildUI();
   makeWindowsDraggable();
+  bindGlobalHandlers();
   try { await loadPeriod('history'); }
   catch(e){ console.error('Ошибка:', e); setStatus('<span class="err">ошибка: '+e.message+'</span>'); }
 })();
-
-window.addEventListener('error', e => console.error('Ошибка страницы:', e.error || e.message));

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Интерактивная карта ГЭС">
+  <rect width="512" height="512" rx="84" fill="#0d1117" stroke="#2a3644" stroke-width="8"/>
+  <path d="M84 372c40-18 66 14 106 0s66-16 106 0 66 14 106 0 46-12 74 0v60a84 84 0 0 1-84 84H168a84 84 0 0 1-84-84z" fill="#16507a"/>
+  <path d="M84 412c40-18 66 14 106 0s66-16 106 0 66 14 106 0 46-12 74 0v36a60 60 0 0 1-60 60H144a60 60 0 0 1-60-60z" fill="#31c9ff" opacity=".85"/>
+  <path d="M196 150h120l22 190H174z" fill="#7f8c99"/>
+  <path d="M308 60 156 296h92l-30 156 152-240h-96z" fill="#ffd23f"/>
+</svg>

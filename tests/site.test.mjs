@@ -1,0 +1,233 @@
+/* Проверки целостности «сайта без сборщика»: что разметка, кэш-лист
+   service worker, model.js и данные не разъехались. Ловит ровно те классы
+   ошибок, которые в таком проекте не видны до первого клика: опечатка в id,
+   забытый файл в SHELL, лишний ключ в данных, отсутствующий иконкой manifest.
+   Запуск: npm test */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = f => fs.readFileSync(path.join(ROOT, f), 'utf8');
+const exists = f => fs.existsSync(path.join(ROOT, f));
+const require_ = createRequire(import.meta.url);
+
+const html = read('index.html');
+const app = read('app.js');
+const sw = read('sw.js');
+const GES = require_(path.join(ROOT, 'model.js'));
+
+/* ---------- index.html ↔ файлы ---------- */
+test('все локальные ресурсы из index.html лежат в репозитории', () => {
+  const refs = [...html.matchAll(/(?:href|src)="([^"]+)"/g)].map(m => m[1])
+    .filter(u => !/^https?:|^data:|^#/.test(u));
+  assert.ok(refs.length >= 10, 'не нашли ни одной ссылки — изменился формат разметки?');
+  for (const u of refs){
+    assert.ok(exists(u), `index.html ссылается на несуществующий файл: ${u}`);
+  }
+});
+
+test('порядок скриптов: version.js и model.js раньше app.js', () => {
+  const at = f => html.indexOf(`src="${f}"`);
+  assert.ok(at('version.js') > -1 && at('version.js') < at('app.js'), 'version.js должен грузиться до app.js');
+  assert.ok(at('model.js') > -1 && at('model.js') < at('app.js'), 'model.js должен грузиться до app.js');
+});
+
+test('PWA-обвязка-complete: манифест, иконки, theme-color, description', () => {
+  assert.match(html, /<link rel="manifest"/, 'нет подключения манифеста — «установить приложение» недоступно');
+  assert.match(html, /name="theme-color"/, 'нет theme-color — статус-бар на мобильном будет белого цвета');
+  assert.match(html, /name="description"/, 'нет description — сниппет в поиске соберётся из мусора');
+  assert.match(html, /rel="icon"/, 'нет иконки — каждый загрузка даёт 404 на /favicon.ico');
+  assert.ok(exists('manifest.webmanifest'), 'нет manifest.webmanifest');
+  const mf = JSON.parse(read('manifest.webmanifest'));
+  assert.equal(mf.lang, 'ru');
+  for (const ic of mf.icons){
+    assert.ok(exists(ic.src), `в манифесте указан несуществующий икон: ${ic.src}`);
+  }
+  assert.ok(mf.icons.some(i => /192/.test(i.sizes)), 'нужна иконка 192px для installability');
+});
+
+/* ---------- id/классы, на которые опирается JS ---------- */
+test('каждый getElementById($(...)) из app.js есть в разметке', () => {
+  const ids = new Set([...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]));
+  const used = new Set([...app.matchAll(/\$\('([A-Za-z0-9_-]+)'\)/g)].map(m => m[1]));
+  const dynamic = new Set();          // создаются самим app.js
+  for (const m of app.matchAll(/(\w+)\.id\s*=\s*'([A-Za-z0-9_-]+)'/g)) dynamic.add(m[2]);
+  const missing = [...used].filter(id => !ids.has(id) && !dynamic.has(id));
+  assert.deepEqual(missing, [], `в разметке нет элементов: ${missing.join(', ')}`);
+});
+
+test('селекторы ручек перетаскивания живы в разметке', () => {
+  /* makeDraggable('sidebar', '.drag-handle') молча ничего не навесит,
+     если класс в HTML потеряется — поэтому проверяем оба конца */
+  for (const sel of ['.drag-handle', '.scenBtn', '.hppItem', '#legend']){
+    const cls = sel.replace(/^\./, '').replace(/^#/, '');
+    /* класс может навешиваться и из JS (строки списка станций создаются в app.js) */
+    assert.ok(html.includes(cls) || app.includes(cls), `${sel} не находится ни в разметке, ни в app.js`);
+  }
+  assert.ok((html.match(/drag-handle/g) || []).length >= 2, 'ручка перетаскивания должна быть у обеих панелей');
+});
+
+/* ---------- app.js ↔ model.js ---------- */
+test('всё деструктурированное из GES действительно экспортируется', () => {
+  const block = app.slice(app.indexOf('const {'), app.indexOf('} = window.GES;'));
+  const names = block.split('\n').slice(1).join(' ')
+    .split(',')
+    .map(s => s.trim().split(':')[0].trim())
+    .filter(Boolean);
+  assert.ok(names.length > 10, 'не разобрали список импортов');
+  for (const n of names){
+    assert.ok(n in GES || n === 'window', `model.js не экспортирует ${n}`);
+  }
+  /* лишние импорты тоже вредны: мёртвая ссылка кричит только в рантайме */
+  const exported = Object.keys(GES);
+  const unused = exported.filter(k => !new RegExp(`[\\s{,(]${k}[\\s,:}]`).test(app));
+  assert.ok(unused.length < 12, 'model.js отдаёт слишком много неиспользуемого: ' + unused.join(', '));
+});
+
+test('app.js не объявляет того, что уже есть в model.js', () => {
+  for (const fn of ['simulate', 'releaseCalculate', 'movingAverage', 'fmtMW', 'fmtAxisPower', 'syntheticData']){
+    assert.ok(!new RegExp(`^function ${fn}\\(`, 'm').test(app),
+      `${fn} объявлена и в model.js, и в app.js — продублированная математика неизбежно расходится`);
+  }
+});
+
+/* ---------- разбор пакетного ответа Open-Meteo ---------- */
+test('пакетный запрос: один URL на все станции и корректная раскладка по станциям', () => {
+  /* функции лежат в app.js (браузерный скрипт без экспортов) — вырезаем их
+     исходник и исполняем здесь: проверяем реальный парсинг, а не копию */
+  const src = app.slice(app.indexOf('function openMeteoUrls'), app.indexOf('async function fetchFromAPIBatch'));
+  assert.ok(src.length > 500 && src.includes('nthPayload'), 'не нашли блок разбора Open-Meteo в app.js');
+  const mod = new Function('HISTORY_START', 'todayISO',
+    src + '\nreturn { openMeteoUrls, apiMeta, nthPayload, assembleData };')(
+    '2023-01-01', () => '2026-11-17');
+
+  /* 1. URL: координаты перечислены через запятую — это и есть «один запрос» */
+  const urls = mod.openMeteoUrls('history', '60.76,60.71,60.67', '28.57,28.17,28.95');
+  assert.equal(urls.length, 2);
+  for (const u of urls){
+    assert.match(u, /latitude=60\.76,60\.71,60\.67/);
+    assert.match(u, /longitude=28\.57,28\.17,28\.95/);
+    assert.match(u, /start_date=2023-01-01&end_date=2026-11-17/);
+    assert.match(u, /timezone=UTC/);
+  }
+  assert.match(mod.openMeteoUrls('forecast', '1', '2')[0], /past_days=30&forecast_days=16/);
+  assert.ok(!mod.openMeteoUrls('forecast', '1', '2')[0].includes('start_date'),
+    'в прогнозе start_date быть не должно');
+
+  /* 2. Ответ со списком координат — массив; с одной — объект. Оба варианта
+        должны разбираться, иначе при одной станции в очереди ряд потеряется */
+  const day = n => ['2024-01-0' + n, '2024-01-0' + (n + 1)];
+  const multi = { daily: { time: day(1), temperature_2m_mean: [-5, -4], precipitation_sum: [1.2, 0] } };
+  const multiArr = [multi, { daily: { time: day(3), temperature_2m_mean: [1, 2], precipitation_sum: [0, 3] } }];
+  const floodArr = [{ daily: { time: day(1), river_discharge: [10, 12] } },
+                    { daily: { time: day(3), river_discharge: [1, 2] } }];
+  assert.deepEqual(mod.nthPayload(multiArr, 1), multiArr[1]);
+  assert.equal(mod.nthPayload(multi, 0), multi, 'одиночный ответ должен читаться как есть');
+  assert.equal(mod.nthPayload(multi, 1), null, 'индекс вне ответа — null, а не падение');
+  assert.equal(mod.nthPayload({ foo: 1 }, 0), null, 'ответ без daily — null');
+
+  const data = mod.assembleData(multiArr[0], floodArr[0]);
+  assert.deepEqual(data.hydro.q, [10, 12]);
+  assert.deepEqual(data.clim.t, [-5, -4]);
+  assert.deepEqual(data.clim.time, day(1));
+  assert.equal(data.clim.p.length, 2);
+
+  /* 3. провенанс станции доживает до кэша — его показывает паспорт */
+  const meta = mod.apiMeta({ latitude: 60.75, longitude: 28.95, model: 'glofas3', grid_code: '0.1',
+                             elevation: 12, timezone: 'UTC', generationtime_ms: 0.4, daily: {} });
+  assert.equal(meta.latitude, 60.75);
+  assert.equal(meta.model, 'glofas3');
+  assert.equal(mod.apiMeta(null), null);
+  assert.equal(mod.apiMeta(multiArr), null, 'массив — не мета одиночного ответа');
+});
+
+/* ---------- данные ↔ паспорт ГЭС ---------- */
+test('каждая станция паспорта обеспечена руслом, профилем дна и климат-моделью', () => {
+  const ids = [...app.matchAll(/\{id:'([a-z]+)'/g)].map(m => m[1]);
+  assert.ok(ids.length >= 6, 'не нашли паспорт станций в app.js');
+  globalThis.window = globalThis;
+  for (const f of ['rivers-data.js', 'terrain-data.js', 'climate-data.js', 'reservoirs-data.js']){
+    require_(path.join(ROOT, f));
+  }
+  const R = globalThis.RIVER_COURSES, E = globalThis.RIVER_ELEV, C = globalThis.CLIMATE_DATA;
+  for (const id of ids){
+    assert.ok(R[id] && R[id].length >= 3, `${id}: нет русла в rivers-data.js — волна прорыва не построится`);
+    assert.ok(E[id], `${id}: нет профиля дна в terrain-data.js — расчёт уйдёт в декоративный фолбэк`);
+    assert.equal(E[id].length, R[id].length,
+      `${id}: отметок дна (${E[id].length}) меньше, чем точек русла (${R[id].length}) — профиль рассохнется`);
+    assert.ok(C[id] && C[id].hist && C[id].hist.length, `${id}: нет климатической модели для климат-режима`);
+  }
+});
+
+test('в данных нет станций, отсутствующих в паспорте (список надо сокращать, не растить)', () => {
+  const ids = [...app.matchAll(/\{id:'([a-z]+)'/g)].map(m => m[1]);
+  /* DECISION(2026-11): 'yash' — русло, профиль дна и климат-модель есть,
+     станции в HPPS нет. Либо вернуть её в паспорт, либо удалить данные;
+     пока держим осознанным долгом, чтобы тест не был вечно красным. */
+  const KNOWN_ORPHANS = new Set(['yash']);
+  globalThis.window = globalThis;
+  for (const f of ['rivers-data.js', 'terrain-data.js', 'climate-data.js']) require_(path.join(ROOT, f));
+  for (const [name, obj] of [['RIVER_COURSES', globalThis.RIVER_COURSES],
+                             ['RIVER_ELEV', globalThis.RIVER_ELEV],
+                             ['CLIMATE_DATA', globalThis.CLIMATE_DATA]]){
+    const orphans = Object.keys(obj || {}).filter(k => !ids.includes(k) && !KNOWN_ORPHANS.has(k));
+    assert.deepEqual(orphans, [], `${name}: данные без станции в паспорте — ${orphans.join(', ')}`);
+  }
+});
+
+/* ---------- service worker ---------- */
+test('sw.js: кэш-лист покрывает оболочку, версия берётся из version.js', () => {
+  const block = sw.slice(sw.indexOf('const SHELL = ['), sw.indexOf('];', sw.indexOf('const SHELL = [')));
+  const shell = [...block.matchAll(/'([^']+)'/g)].map(m => m[1]);
+  assert.ok(shell.length >= 10, 'не разобрали SHELL в sw.js');
+  const local = shell.filter(u => /^https?:/.test(u) === false);
+  assert.ok(local.includes('./model.js'), 'model.js не в кэше оболочки — офлайн сломается');
+  assert.ok(local.includes('./version.js'), 'version.js не в кэше — importScripts в sw упадёт офлайн');
+  assert.ok(local.includes('./app.js') && local.includes('./index.html'));
+  for (const u of local){
+    if (u === './') continue;
+    assert.ok(exists(u.slice(2)), `в SHELL указан несуществующий файл: ${u}`);
+  }
+  assert.match(sw, /importScripts\('\.\/version\.js'\)/, 'sw.js не подключает version.js');
+  assert.match(sw, /'ges-shell-' \+ \(self\.APP_VERSION/, 'имя кэша не привязано к APP_VERSION');
+  assert.ok(!/ges-shell-v\d+/.test(sw), 'в sw.js захардкожена версия кэша — правьте только version.js');
+});
+
+test('версия сборки — единственный номер на страницу, sw и tests', () => {
+  const v = require_(path.join(ROOT, 'version.js'));
+  void v;
+  const htmlVer = /сборка/.test(html);
+  assert.ok(htmlVer, 'пропал штамп сборки — диагностика кэша не нужна?');
+  assert.ok(!/id="buildStamp">[^<]*v\d\d/.test(html),
+    'номер версии снова прописан в index.html — он должен приходить из version.js');
+  assert.match(read('version.js'), /APP_VERSION = 'v\d+'/);
+});
+
+/* ---------- консистентность физики/документации ---------- */
+test('константа Мэннинга: код, подпись в UI и README не противоречат друг другу', () => {
+  const m = app.match(/const MANNING_N = ([\d.]+);/);
+  assert.ok(m, 'MANNING_N не найдена — правка константы разойдётся с README');
+  const n = parseFloat(m[1]);
+  const readme = read('README.md');
+  const claims = [...readme.matchAll(/n=0?[,.](\d+)/g)].map(x => parseFloat('0.' + x[1]));
+  for (const c of claims){
+    assert.ok(Math.abs(c - n) < 1e-9, `README заявляет n=${c}, а код считает при n=${n}`);
+  }
+  assert.ok(!/0\.035/.test(app), 'в app.js остался забынный литерал 0.035 вместо MANNING_N');
+});
+
+test('в UI не осталось «сырых» toFixed для подписей пользователю', () => {
+  /* toFixed допустим только при подготовке ЧИСЕЛ для Chart.js (округление
+     серий). Текстовые подписи идут через GES.num/fmtMW — иначе в интерфейсе
+     точка вместо запятой и 'NaN' вместо прочерка. */
+  const unit = /(['"`]\s*(МВт|кВт|км|м³\/с|км²|м%?|%)|° )/;
+  const offenders = app.split('\n')
+    .map((line, n) => ({ line, n: n + 1 }))
+    .filter(o => o.line.includes('.toFixed(') && unit.test(o.line));
+  assert.deepEqual(offenders.map(o => `${o.n}: ${o.line.trim()}`), [],
+    'строки с locale-форматом пропущены');
+});
