@@ -2152,39 +2152,56 @@ function makeDraggable(element, handleSelector){
 function makeResizable(element, minW=150, minH=100){
   const el = $(element);
   if(!el) return;
-  const resizer = document.createElement('div');
-  resizer.className = 'resizer';
-  el.appendChild(resizer);
-
-  let isResizing=false, startX=0, startY=0, startW=0, startH=0;
-
-  const onDown=(e)=>{
-    if(e.button!==0) return;
-    isResizing=true;
-    startX=e.clientX; startY=e.clientY;
-    const cs=getComputedStyle(el);
-    startW=parseFloat(cs.width)||el.offsetWidth;
-    startH=parseFloat(cs.height)||el.offsetHeight;
-    el.style.right=''; el.style.bottom='';
-    document.addEventListener('mousemove',onMove);
-    document.addEventListener('mouseup',onUp);
-    e.preventDefault();
-  };
-  const onMove=(e)=>{
-    if(!isResizing) return;
-    const w=Math.max(minW, startW+(e.clientX-startX));
-    const h=Math.max(minH, startH+(e.clientY-startY));
-    el.style.width=w+'px'; el.style.height=h+'px';
-  };
-  const onUp=()=>{
-    isResizing=false;
-    document.removeEventListener('mousemove',onMove);
-    document.removeEventListener('mouseup',onUp);
-  };
-  resizer.addEventListener('mousedown',onDown);
+  el.style.position='absolute';
+  ['tl','tr','bl','br'].forEach(pos=>{
+    const resizer = document.createElement('div');
+    resizer.className = 'resizer '+pos;
+    el.appendChild(resizer);
+    resizer.addEventListener('mousedown',e=>{
+      if(e.button!==0) return;
+      e.preventDefault(); e.stopPropagation();
+      const cs=getComputedStyle(el);
+      let startW=parseFloat(cs.width)||el.offsetWidth;
+      let startH=parseFloat(cs.height)||el.offsetHeight;
+      let startL=parseFloat(cs.left)||el.offsetLeft;
+      let startT=parseFloat(cs.top)||el.offsetTop;
+      let sx=e.clientX, sy=e.clientY;
+      let dragging=true;
+      const onMove=(ev)=>{
+        if(!dragging) return;
+        const dx=ev.clientX-sx, dy=ev.clientY-sy;
+        if(pos.includes('tl')||pos.includes('bl')){
+          let nw=startW-dx;
+          let nL=startL+dx;
+          if(nw<minW){ nL+=nW-minW; nw=minW; }
+          el.style.left=nL+'px'; el.style.width=nw+'px';
+        } else {
+          el.style.width=Math.max(minW,startW+dx)+'px';
+        }
+        if(pos.includes('tl')||pos.includes('tr')){
+          let nh=startH-dy;
+          let nT=startT+dy;
+          if(nh<minH){ nT+=nh-minH; nh=minH; }
+          el.style.top=nT+'px'; el.style.height=nh+'px';
+        } else {
+          el.style.height=Math.max(minH,startH+dy)+'px';
+        }
+      };
+      const onUp=()=>{ dragging=false; document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp); };
+      document.addEventListener('mousemove',onMove);
+      document.addEventListener('mouseup',onUp);
+    });
+  });
 }
 
 function makeWindowsDraggable(){
+  ['sidebar','chartPanel'].forEach(id=>{
+    const el=$(id);
+    if(el){
+      el.querySelectorAll('.resizer').forEach(r=>r.remove());
+      el.style.position='absolute';
+    }
+  });
   makeDraggable('sidebar','header:first-of-type');
   makeResizable('sidebar', 200, 200);
   makeDraggable('chartPanel','.head');
