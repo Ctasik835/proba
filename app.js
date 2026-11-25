@@ -2111,8 +2111,55 @@ function loop(t){
 /* ============================================================
    СТАРТ
    ============================================================ */
+/* ============================================================
+   ПЕРЕТАСКИВАНИЕ ОКЕН МЫШКОЙ
+   ============================================================ */
+function makeDraggable(element, handleSelector){
+  const el = $(element);
+  if(!el) return;  const handle = handleSelector ? el.querySelector(handleSelector) : el;
+  if(!handle) return;  el.classList.add('draggable');
+  handle.classList.add('draggable-handle');
+
+  let isDragging=false, startX=0, startY=0, startLeft=0, startTop=0;
+
+  const onDown=(e)=>{
+    if(e.button!==0) return;
+    isDragging=true;
+    startX=e.clientX; startY=e.clientY;
+    const r=el.getBoundingClientRect();
+    startLeft=r.left; startTop=r.top;
+    el.style.right=''; el.style.bottom='';
+    el.style.position='absolute';
+    el.style.left=startLeft+'px'; el.style.top=startTop+'px';
+    el.style.zIndex='10000';
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+    e.preventDefault();
+  };
+  const onMove=(e)=>{
+    if(!isDragging) return;
+    el.style.left=(startLeft+(e.clientX-startX))+'px';
+    el.style.top=(startTop+(e.clientY-startY))+'px';
+  };
+  const onUp=()=>{
+    isDragging=false;
+    document.removeEventListener('mousemove',onMove);
+    document.removeEventListener('mouseup',onUp);
+  };
+  handle.addEventListener('mousedown',onDown);
+}
+
+function makeWindowsDraggable(){
+  makeDraggable('sidebar','header:first-of-type');
+  makeDraggable('chartPanel','.head');
+  makeDraggable('topbar');
+  makeDraggable('timeline');
+  makeDraggable('alertBanner');
+}
+
 (async function boot(){
   buildUI();
+  makeWindowsDraggable();
   try { await loadPeriod('history'); }
   catch(e){ console.error('Ошибка:', e); setStatus('<span class="err">ошибка: '+e.message+'</span>'); }
 })();

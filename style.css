@@ -151,3 +151,8 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
 .scenBtn.reset{background:rgba(255,255,255,.06);border-color:rgba(120,180,220,.35);color:#7ec4f3}
 .scenBtn.reset:hover{background:rgba(255,255,255,.12);color:#b3d9ff}
 .scenBtn.reset:active{background:rgba(49,201,255,.15)}
+
+/* Перетаскиваемые окна */
+.draggable{user-select:none}
+.draggable-handle{cursor:move}
+.draggable-handle:active{cursor:grabbing}
