@@ -1,0 +1,17 @@
+# зависимости и сборка
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# временное и локальное
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+.cache/
+dist/
+.coverage/
+coverage/
+
+# локальные прогоны
+serve.log

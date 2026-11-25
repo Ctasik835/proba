@@ -2,10 +2,19 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Интерактивная карта ГЭС</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Интерактивная карта ГЭС — рельеф, климат, гидрология, прорывы плотин</title>
+<meta name="description" content="Интерактивная карта малых ГТС Карельского перешейка: рельеф, климат CMIP6, расходы Open-Meteo, сценарии паводка, засухи и прорыва плотины с расчётом по 1D уравнениям мелкой воды."/>
+<meta name="theme-color" content="#0d1117"/>
+<meta name="color-scheme" content="dark"/>
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml"/>
+<link rel="apple-touch-icon" href="icons/icon-192.png"/>
+<link rel="manifest" href="manifest.webmanifest"/>
+<link rel="preconnect" href="https://unpkg.com" crossorigin/>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="style.css"/>
+<noscript><style>#noscript{display:flex!important}</style></noscript>
 </head>
 <body>
 
@@ -16,27 +25,34 @@
   <p>Рельеф · климат · гидрология · катастрофы</p>
 </header>
 
-<div id="modeTabs">
-  <button data-mode="history" class="active">📜 История</button>
-  <button data-mode="forecast">🌤 Прогноз</button>
-  <button data-mode="climate">🌍 Климат</button>
+<div id="modeTabs" role="tablist" aria-label="Режим данных">
+  <button data-mode="history" class="active" role="tab" aria-selected="true">📜 История</button>
+  <button data-mode="forecast" role="tab" aria-selected="false">🌤 Прогноз</button>
+  <button data-mode="climate" role="tab" aria-selected="false">🌍 Климат</button>
 </div>
 
-<div id="alertBanner">💥 ПРОРЫВ ПЛОТИНЫ</div>
-<div id="statusBar"><b>Статус:</b> <span id="statusText">инициализация…</span><button id="refreshBtn" title="Обновить данные (сбросить кэш)">⟳</button></div>
+<div id="alertBanner" role="status" aria-live="assertive">💥 ПРОРЫВ ПЛОТИНЫ</div>
+<div id="statusBar"><b>Статус:</b> <span id="statusText" role="status" aria-live="polite">инициализация…</span><button id="refreshBtn" type="button" title="Обновить данные (сбросить весь локальный кэш)" aria-label="Обновить данные и сбросить кэш">⟳</button></div>
+
+<!-- переключатели панелей для узких экранов -->
+<div id="mobileBar">
+  <button id="panelToggle" type="button" aria-expanded="false" aria-controls="sidebar">☰ Станции</button>
+  <button id="chartToggle" type="button" aria-expanded="false" aria-controls="chartPanel">📈 График</button>
+</div>
 
 <aside id="sidebar">
-  <header>Сценарии</header>
-  <div id="scenarios">
-    <button class="scenBtn active" data-scen="normal">📊 Норма</button>
-    <button class="scenBtn" data-scen="flood">🌊 Паводок</button>
-    <button class="scenBtn" data-scen="drought">☀️ Засуха</button>
-    <button class="scenBtn danger" data-scen="dam_break">💥 Прорыв</button>
-    <button class="scenBtn" data-scen="release" title="Учебный сценарий дополнительного сброса — только Перовская МГЭС">📤 Сброс</button>
-    <button class="scenBtn reset" data-scen="reset" title="Сбросить сценарий на «Норма»">↺ Сброс настроек</button>
+  <header class="drag-handle">Сценарии</header>
+  <div id="scenarios" role="group" aria-label="Сценарии">
+    <button class="scenBtn active" type="button" data-scen="normal" aria-pressed="true">📊 Норма</button>
+    <button class="scenBtn" type="button" data-scen="flood" aria-pressed="false">🌊 Паводок</button>
+    <button class="scenBtn" type="button" data-scen="drought" aria-pressed="false">☀️ Засуха</button>
+    <button class="scenBtn danger" type="button" data-scen="dam_break" aria-pressed="false">💥 Прорыв</button>
+    <button class="scenBtn" type="button" data-scen="release" aria-pressed="false" title="Учебный сценарий дополнительного сброса — только Перовская МГЭС">📤 Сброс</button>
+    <button class="scenBtn reset" type="button" data-scen="reset" title="Вернуть сценарий «Норма»">↺ Сброс настроек</button>
   </div>
   <header style="border-top:1px solid var(--line)">ГЭС <span id="hppCount"></span></header>
-  <div id="hppList"></div>
+  <div id="hppList" role="group" aria-label="Список ГЭС"></div>
+  <div id="legend" aria-hidden="true"></div>
   <div id="details">
     <h3>Выберите ГЭС</h3>
     <p style="color:var(--dim);margin:0">Клик по маркеру или списку — детали и график.</p>
@@ -44,14 +60,15 @@
 </aside>
 
 <div id="timeline">
-  <button id="playBtn">▶</button>
+  <button id="playBtn" type="button" aria-label="Имитировать время" aria-pressed="false">▶</button>
   <div id="dateBox">—</div>
   <div id="sliderWrap">
-    <input type="range" id="slider" min="0" max="0" value="0" step="1"/>
-    <div class="ticks"><span id="tickA"></span><span id="tickB"></span><span id="tickC"></span></div>
+    <label class="visually-hidden" for="slider">Дата: переключение стрелками, Home/End — начало и конец ряда</label>
+    <input type="range" id="slider" min="0" max="0" value="0" step="1" aria-describedby="dateBox"/>
+    <div class="ticks" aria-hidden="true"><span id="tickA"></span><span id="tickB"></span><span id="tickC"></span></div>
   </div>
   <div id="speedBox">
-    <span>скорость</span>
+    <label for="speed">скорость</label>
     <select id="speed">
       <option value="30">×1</option>
       <option value="10" selected>×3</option>
@@ -61,26 +78,51 @@
   </div>
 </div>
 
-<section id="chartPanel">
-  <div class="head"><b id="chartTitle">—</b><span id="chartSub"></span></div>
-  <div class="chart-wrap"><canvas id="chartPowerC"></canvas></div>
-  <div class="chart-wrap"><canvas id="chartLevelC"></canvas></div>
+<section id="chartPanel" aria-label="Графики выбранной станции">
+  <div class="head drag-handle"><b id="chartTitle">—</b><span id="chartSub"></span></div>
+  <div class="chart-block"><div class="chart-label" id="chartLabelPower">мощность, МВт</div>
+    <div class="chart-wrap"><canvas id="chartPowerC" role="img" aria-label="График мощности за 120 дней вокруг выбранной даты"></canvas></div></div>
+  <div class="chart-block"><div class="chart-label" id="chartLabelLevel">уровень водохранилища, м</div>
+    <div class="chart-wrap"><canvas id="chartLevelC" role="img" aria-label="График уровня водохранилища"></canvas></div></div>
 </section>
 
+<div id="noscript" hidden>Для карты нужны JavaScript и доступ к Open-Meteo/OSM. Включите JS — данные можно смотреть и офлайн из кэша.</div>
+<div id="buildStamp">сборка <b id="buildStampVer">—</b></div>
+
+<script src="version.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-if ('serviceWorker' in navigator){
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
-  });
-}
-</script>
-<div id="buildStamp">сборка <b>v45 · контур Перовской по OSM исправлен</b></div>
 <script src="rivers-data.js"></script>
 <script src="reservoirs-data.js"></script>
 <script src="terrain-data.js"></script>
 <script src="climate-data.js"></script>
+<script src="model.js"></script>
 <script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then(reg => {
+        /* обновление SW по возврату на вкладку: раньше новая версия
+           подхватывалась только через перезагрузку страницы вручную */
+        reg.addEventListener('updatefound', () => {
+          const nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener('statechange', () => {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller){
+              const b = document.getElementById('updateReady');
+              if (b) b.hidden = false;
+            }
+          });
+        });
+      })
+      .catch(() => {});
+  });
+}
+</script>
+<button id="updateReady" type="button" hidden>Доступна новая версия — обновить</button>
+<script>
+document.getElementById('updateReady').addEventListener('click', () => location.reload());
+</script>
 </body>
 </html>

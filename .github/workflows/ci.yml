@@ -1,0 +1,37 @@
+name: CI
+
+# Сайт без сборки: проверяем синтаксис, целостность разметки/кэша/данных
+# и автотесты модели. Pages-деплой сознательно НЕ отсюда — см. README
+# («Деплой на GitHub Pages»), там источник должен остаться «Deploy from a
+# branch», иначе red-крест на каждом пуше, пока Pages не переключён.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Синтаксис всех скриптов
+        run: npm run lint
+      - name: Тесты модели и целостности сайта
+        run: npm test
+      - name: Иконки PWA воспроизводимы из исходника
+        run: |
+          python3 tools/make-icons.py
+          git diff --exit-code icons/ || {
+            echo "::error::icons/*.png не совпадают с tools/make-icons.py — перегенерируйте их (npm run icons)";
+            exit 1;
+          }
+      - name: Все локальные ресурсы из index.html существуют
+        run: node --test tests/site.test.mjs
