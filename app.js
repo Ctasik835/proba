@@ -1953,25 +1953,31 @@ function buildUI(){
     const btn = $(btnId);
     if (!btn) return;
     btn.onclick = () => {
+      /* у графиков своё состояние (show + remember), не просто .open */
+      if (panelId === 'chartPanel'){ setChartsVisible(!chartsVisible()); return; }
       const panel = $(panelId);
       const open = panel.classList.toggle('open');
       btn.classList.toggle('on', open);
       btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-      if (open && panelId === 'chartPanel') panel.classList.add('show');
-      if (panelId === 'chartPanel') setTimeout(() => { updateChart(); }, 60);
     };
   });
+  const hideBtn = $('chartHideBtn'), showBtn = $('chartShowBtn');
+  if (hideBtn) hideBtn.onclick = () => setChartsVisible(false);
+  if (showBtn) showBtn.onclick = () => setChartsVisible(true);
+  /* Esc закрывает по одному слою: сначала графики, затем ящик со станциями */
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
-    ['sidebar','chartPanel'].forEach(id => {
-      const el = $(id);
-      if (el && el.classList.contains('open')){
-        el.classList.remove('open');
-        const b = $(id === 'sidebar' ? 'panelToggle' : 'chartToggle');
-        if (b){ b.classList.remove('on'); b.setAttribute('aria-expanded','false'); }
-      }
-    });
+    if (chartsVisible()){ setChartsVisible(false); return; }
+    const side = $('sidebar');
+    if (side && side.classList.contains('open')){
+      side.classList.remove('open');
+      const b = $('panelToggle');
+      if (b){ b.classList.remove('on'); b.setAttribute('aria-expanded','false'); }
+    }
   });
+  /* намерение из прошлой сессии: «я графики не просил» */
+  if (!chartsWanted()) setChartsVisible(false, {remember:false});
+  else if ($('chartHideBtn')) $('chartHideBtn').disabled = !chartsVisible();
 
   /* Сценарии */
   document.querySelectorAll('.scenBtn').forEach(btn => {
@@ -2210,7 +2216,9 @@ async function selectHPP(id, fromList){
 
   document.querySelectorAll('.hppItem').forEach(el => el.classList.toggle('active', el.dataset.id === id));
   $('details').innerHTML = detailsHTML(h);
-  $('chartPanel').classList.add('show');
+  /* панель не показываем «вслепую»: если пользователь её скрыл, остаётся
+     скрытой; если открыта — перерисовать под новую станцию */
+  if (chartsWanted() || chartsVisible()) setChartsVisible(true, {remember:false});
   $('chartTitle').textContent = h.name;
   $('chartSub').textContent = `р. ${h.river}`;
 
@@ -2455,6 +2463,62 @@ function loop(t){
    Тащим только рабочие окна (список и графики) — статус, баннер и таймлайн
    были drag-таргетами без всякого смысла и мешали обычным кликам.
    ============================================================ */
+/* ============================================================
+   ВИДИМОСТЬ ГРАФИКОВ
+   ============================================================ */
+/* Скрывать/показывать панель можно четырьмя способами — ✕ в шапке, тумблер 📈
+   на узком экране, Esc и пилюля «📈 Графики» на месте спрятанной панели.
+   Все они идут через setChartsVisible: с двумя независимыми
+   classList.toggle('show') состояния разъезжаются, а прежнее
+   $('chartPanel').classList.add('show') в selectHPP ещё и молча возвращало
+   панель при выборе следующей станции — то есть «скрыть» не работало.
+   Намерение пользователя запоминается в localStorage (ges_charts_v1):
+   перезагрузка страницы не должна включать графики вопреки ему. */
+const CHARTS_KEY = 'ges_charts_v1';
+function chartsWanted(){
+  try { return localStorage.getItem(CHARTS_KEY) !== '0'; } catch(e){ return true; }
+}
+function chartsVisible(){
+  const panel = $('chartPanel');
+  return !!panel && panel.classList.contains('show');
+}
+/* canvas внутри display:none имеет размер 0×0: Chart.js пересчитывает
+   геометрию только на resize(), иначе после показа остаются пустые рамки */
+function resizeCharts(){
+  if (S.chartPower) S.chartPower.resize();
+  if (S.chartLevel) S.chartLevel.resize();
+}
+function setChartsVisible(on, opts){
+  const o = opts || {};
+  const panel = $('chartPanel');
+  if (!panel) return;
+  on = !!on;
+  const from = document.activeElement;
+  panel.classList.toggle('show', on);
+  panel.classList.toggle('open', on && NARROW());   // на узком — та же шухляда
+  const tog = $('chartToggle');
+  if (tog){
+    tog.classList.toggle('on', on);
+    tog.setAttribute('aria-expanded', on ? 'true' : 'false');
+  }
+  const hide = $('chartHideBtn'), show = $('chartShowBtn');
+  if (hide){
+    hide.disabled = !on;
+    if (!on && from === hide) hide.blur();
+  }
+  if (show){
+    show.hidden = on;
+    show.setAttribute('aria-expanded', on ? 'true' : 'false');
+    /* фокус передаём видимой кнопке, иначе с клавиатуры путь к графикам теряется */
+    if (!on && from === hide) show.focus();
+    if (on && from === show && hide) hide.focus();
+  }
+  if (on) setTimeout(() => { resizeCharts(); updateChart(); }, 60);
+  if (o.remember !== false){
+    try { localStorage.setItem(CHARTS_KEY, on ? '1' : '0'); } catch(e){}
+  }
+}
+
 const LAYOUT_KEY = 'ges_layout_v1';
 const NARROW = () => window.matchMedia && window.matchMedia('(max-width:900px)').matches;
 
@@ -2496,6 +2560,8 @@ function applyLayout(id, el, box){
   if (id === 'sidebar') document.documentElement.style.setProperty('--rail', Math.round(box.w) + 'px');
 }
 
+const isButton = el => !!(el && el.closest && el.closest('button'));
+
 function makeDraggable(id, handleSelector){
   const el = $(id);
   if (!el) return;
@@ -2504,6 +2570,7 @@ function makeDraggable(id, handleSelector){
 
   handle.addEventListener('pointerdown', e => {
     if (e.button !== 0 || NARROW()) return;      // на узких экранах панели — ящики
+    if (isButton(e.target)) return;              // ✕ в шапке — не ручка перетаскивания
     e.preventDefault();
     const r = el.getBoundingClientRect();
     const dx = e.clientX - r.left, dy = e.clientY - r.top;
@@ -2536,7 +2603,8 @@ function makeDraggable(id, handleSelector){
 
   /* двойной клик по заголовку — вернуть панель на место (единственный
      «escape hatch», кроме ⟳, который раньше был только через reload) */
-  handle.addEventListener('dblclick', () => {
+  handle.addEventListener('dblclick', e => {
+    if (isButton(e.target)) return;              // двойной клик по ✕ — не «вернуть окно»
     clearLayout(id);
     el.style.position = ''; el.style.left = ''; el.style.top = '';
     el.style.width = ''; el.style.height = ''; el.style.right = ''; el.style.bottom = '';

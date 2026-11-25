@@ -3,13 +3,14 @@
    том месте конфига Chart.js — конструктор тогда не падает, а ломается первая
    же отрисовка, и из одного пропуска вырастает «пустые графики + мёртвая
    перемотка + лагающий сброс». Этот прогон поднимает страницу целиком и
-   проверяет 37 сценарных шагов.
+   проверяет 50 сценарных шагов (в обычном режиме).
 
    Запуск (зависимости не входят в репозиторий — стенд dev-инструмент):
      npm i --no-save jsdom leaflet@1.9.4 chart.js@4.4.1
      npm run smoke
      SMOKE_OFFLINE=1 npm run smoke                      # сеть падает
      SMOKE_NARROW=1 SMOKE_MOTION=reduce npm run smoke   # узкий экран + меньше движения
+     SMOKE_CHARTS=0 npm run smoke                       # графики закрыты в прошлой сессии
 */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -37,6 +38,9 @@ if (!fs.existsSync(CHART_UMD)){
 const OFFLINE = process.env.SMOKE_OFFLINE === '1';
 const NARROW = process.env.SMOKE_NARROW === '1';
 const REDUCE = process.env.SMOKE_MOTION === 'reduce';
+/* значение ges_charts_v1 «до старта» — проверяем, что скрытые в прошлой
+   сессии графики не всплывают сами */
+const CHARTS_SEED = process.env.SMOKE_CHARTS || '';
 
 const errors = [];
 const warns = [];
@@ -149,6 +153,22 @@ const dom = new JSDOM(html, {
       return { left: 12, top: 64, right: 12 + w, bottom: 300, width: w, height: 236, x: 12, y: 64 };
     };
     window.ResizeObserver = class { observe(){} unobserve(){} disconnect(){} };
+    /* jsdom запрещает localStorage на file:// (opaque origin) — а приложению он
+       нужен: кэш снимка, раскладка окон и намерение «графики скрыты». Без стаба
+       эти ветки молча выпадали в catch и вообще не проверялись. */
+    const store = new Map(CHARTS_SEED ? [['ges_charts_v1', CHARTS_SEED]] : []);
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: k => (store.has(k) ? store.get(k) : null),
+        setItem: (k, v) => { store.set(k, String(v)); },
+        removeItem: k => { store.delete(k); },
+        clear: () => store.clear(),
+        key: i => Array.from(store.keys())[i] === undefined ? null : Array.from(store.keys())[i],
+        get length(){ return store.size; }
+      }
+    });
+    window.__store = store;
   }
 });
 
@@ -192,7 +212,9 @@ if (OFFLINE){
 click(q('.hppItem[data-id="pero"]'));
 await wait(450);
 check('паспорт станции открыт', /Перовская/.test(q('#details').textContent));
-check('панель графиков показана', q('#chartPanel').classList.contains('show'));
+check('панель открыта — или остаётся скрытой по намерению из прошлой сессии',
+  q('#chartPanel').classList.contains('show') === (CHARTS_SEED !== '0'),
+  'show=' + q('#chartPanel').classList.contains('show') + ' · seed=' + (CHARTS_SEED || 'нет'));
 {
   const n = chart('chartPowerC')?.data.datasets[0]?.data.length || 0;
   const ln = chart('chartLevelC')?.data.datasets[0]?.data.length || 0;
@@ -204,6 +226,58 @@ check('панель графиков показана', q('#chartPanel').classLi
     chart('chartPowerC').options.scales.x.display === false && chart('chartLevelC').options.scales.x.display === true);
   check('подсказка мощности включена', chart('chartPowerC').options.plugins.tooltip.enabled === true);
 }
+/* ---------- скрытие/показ графиков ---------- */
+if (CHARTS_SEED === '0'){
+  check('скрытые в прошлой сессии графики не всплыли при выборе станции',
+    !q('#chartPanel').classList.contains('show') && q('#chartShowBtn').hidden === false,
+    'show=' + q('#chartPanel').classList.contains('show') +
+    ' · пилюля скрыта: ' + q('#chartShowBtn').hidden);
+  check('✕ в шапке задизейблен, пока панели нет', q('#chartHideBtn').disabled === true);
+  check('данные при этом всё равно считаются (ряд на графике есть)',
+    (chart('chartPowerC')?.data.datasets[0]?.data.length || 0) > 10,
+    chart('chartPowerC')?.data.datasets[0]?.data.length + ' точек');
+  click(q('#chartShowBtn'));
+  await wait(300);
+  check('пилюля возвращает панель', q('#chartPanel').classList.contains('show'),
+    'ges_charts_v1=' + window.__store.get('ges_charts_v1'));
+} else {
+  const wasShown = q('#chartPanel').classList.contains('show');
+  check('при выборе станции графики открыты', wasShown);
+  click(q('#chartHideBtn'));
+  await wait(150);
+  check('✕ скрывает панель графиков', !q('#chartPanel').classList.contains('show'));
+  check('на её месте появилась пилюля «Графики»', q('#chartShowBtn').hidden === false);
+  check('намерение запомнено (перезагрузка не вернёт графики)',
+    window.__store.get('ges_charts_v1') === '0', 'ges_charts_v1=' + window.__store.get('ges_charts_v1'));
+  check('тумблер 📈 синхронизирован со скрытым состоянием',
+    q('#chartToggle').getAttribute('aria-expanded') === 'false' &&
+    !q('#chartToggle').classList.contains('on'));
+  click(q('.hppItem[data-id="igla"]'));
+  await wait(300);
+  check('скрытые графики НЕ всплывают при выборе другой станции',
+    !q('#chartPanel').classList.contains('show'), 'show=' + q('#chartPanel').classList.contains('show'));
+  click(q('#chartShowBtn'));
+  await wait(300);
+  check('пилюля возвращает панель и рядом с новой станцией',
+    q('#chartPanel').classList.contains('show') &&
+    /Игла/.test(q('#chartTitle').textContent), q('#chartTitle').textContent);
+  check('после возврата ряд перерисован (resize + update)',
+    (chart('chartPowerC')?.data.datasets[0]?.data.length || 0) > 10,
+    chart('chartPowerC')?.data.datasets[0]?.data.length + ' точек');
+  check('ges_charts_v1 снова «1»', window.__store.get('ges_charts_v1') === '1');
+  /* Esc закрывает по одному слою */
+  q('#map').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await wait(150);
+  check('Esc прячет графики', !q('#chartPanel').classList.contains('show'));
+  q('#map').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await wait(120);
+  check('второй Esc не ломает страницу', errors.length === 0, errors.slice(0, 1).join(''));
+  click(q('#chartToggle'));
+  await wait(300);
+  check('тумблер 📈 тоже возвращает панель', q('#chartPanel').classList.contains('show'),
+    'aria-expanded=' + q('#chartToggle').getAttribute('aria-expanded'));
+}
+
 click(q('.hppItem[data-id="igla"]'));
 await wait(300);
 check('«Игла» (без генератора) без NaN', !/NaN/.test(q('#details').textContent));

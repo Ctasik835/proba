@@ -79,12 +79,19 @@
 </div>
 
 <section id="chartPanel" aria-label="Графики выбранной станции">
-  <div class="head drag-handle"><b id="chartTitle">—</b><span id="chartSub"></span></div>
+  <div class="head drag-handle"><b id="chartTitle">—</b><span id="chartSub"></span>
+    <button id="chartHideBtn" type="button" title="Скрыть графики (или Esc)">✕<span class="visually-hidden"> скрыть графики</span></button>
+  </div>
   <div class="chart-block"><div class="chart-label" id="chartLabelPower">мощность, МВт</div>
     <div class="chart-wrap"><canvas id="chartPowerC" role="img" aria-label="График мощности за 120 дней вокруг выбранной даты"></canvas></div></div>
   <div class="chart-block"><div class="chart-label" id="chartLabelLevel">уровень водохранилища, м</div>
     <div class="chart-wrap"><canvas id="chartLevelC" role="img" aria-label="График уровня водохранилища"></canvas></div></div>
 </section>
+
+<!-- появляется ровно на месте спрятанной панели; на узких экранах за показ
+     отвечает тумблер 📈 в #mobileBar, поэтому пилюля там скрыта -->
+<button id="chartShowBtn" type="button" hidden aria-controls="chartPanel"
+        title="Показать графики выбранной станции">📈 Графики</button>
 
 <div id="noscript" hidden>Для карты нужны JavaScript и доступ к Open-Meteo/OSM. Включите JS — данные можно смотреть и офлайн из кэша.</div>
 <div id="buildStamp">сборка <b id="buildStampVer">—</b></div>
