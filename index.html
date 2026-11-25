@@ -105,31 +105,52 @@
 <script src="climate-data.js"></script>
 <script src="model.js"></script>
 <script src="app.js"></script>
+<button id="updateReady" type="button" hidden title="Перехватить новую версию и перезагрузить страницу">Доступна новая версия — обновить</button>
 <script>
-if ('serviceWorker' in navigator){
+/* «Доступна новая версия — обновить». Показываем кнопку ТОЛЬКО когда новый
+   service worker реально застрял в состоянии waiting.
+
+   Раньше она всплывала на каждой первой загрузке после любого изменения sw.js:
+   обработчик реагировал на состояние 'installed', а 'installed' наступает
+   раньше, чем install-хендлер успевает вызвать skipWaiting() — то есть воркер
+   в этот момент уже сам собой активируется и перезагрузка ему не нужна.
+   Плюс оболочка отдаётся из sw.js по NETWORK-FIRST: свежие index.html/app.js
+   попадают на страницу и без «обновить». Отсюда — пауза в 1,5 с и проверка
+   reg.waiting: если за это время воркер так и остался ожидающим (install не
+   дошёл до skipWaiting), без обновления действительно не обойтись.
+
+   Клик, в отличие от прежнего location.reload(), сначала передаёт управление
+   новому воркеру сообщением 'skipWaiting' (для него в sw.js есть обработчик):
+   перезагрузка страницы, которую держит старый воркер, сама по себе его не
+   активирует — кнопка возвращалась бы снова и снова. */
+(function(){
+  const btn = document.getElementById('updateReady');
+  if (!btn || !('serviceWorker' in navigator)) return;
+  let reg = null, clicked = false, reloaded = false;
+  const reloadOnce = () => { if (reloaded) return; reloaded = true; btn.hidden = true; location.reload(); };
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js')
-      .then(reg => {
-        /* обновление SW по возврату на вкладку: раньше новая версия
-           подхватывалась только через перезагрузку страницы вручную */
-        reg.addEventListener('updatefound', () => {
-          const nw = reg.installing;
-          if (!nw) return;
-          nw.addEventListener('statechange', () => {
-            if (nw.state === 'installed' && navigator.serviceWorker.controller){
-              const b = document.getElementById('updateReady');
-              if (b) b.hidden = false;
-            }
-          });
-        });
-      })
-      .catch(() => {});
+    navigator.serviceWorker.register('./sw.js').then(r => {
+      reg = r;
+      let t = 0;
+      const arm = () => { clearTimeout(t); t = setTimeout(() => { if (reg && reg.waiting) btn.hidden = false; }, 1500); };
+      r.addEventListener('updatefound', () => {
+        const nw = r.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', () => { if (nw.state === 'installed') arm(); });
+      });
+      if (r.waiting) arm();
+      /* как только новый воркер перехватил управление — перезагружаемся ровно один
+         раз и только если этого сам пользователь попросил */
+      navigator.serviceWorker.addEventListener('controllerchange', () => { if (clicked) reloadOnce(); });
+    }).catch(() => {});
   });
-}
-</script>
-<button id="updateReady" type="button" hidden>Доступна новая версия — обновить</button>
-<script>
-document.getElementById('updateReady').addEventListener('click', () => location.reload());
+  btn.addEventListener('click', () => {
+    clicked = true;
+    btn.hidden = true;
+    try { if (reg && reg.waiting) reg.waiting.postMessage('skipWaiting'); } catch(e){}
+    setTimeout(reloadOnce, 600);        // если controllerchange не дошёл — обновимся и так
+  });
+})();
 </script>
 </body>
 </html>

@@ -49,11 +49,20 @@ const brief = e => String((e && (e.stack || e.message)) || e).split('\n')
   .filter(l => !/chart\.umd|leaflet\.js|runtime-script-errors|EventTarget-impl|Window\.js/.test(l))
   .slice(0, 3).join(' | ');
 const vc = new VirtualConsole();
-vc.on('jsdomError', e => errors.push('jsdomError: ' + brief(e)));
+/* attempts of navigation — это НЕ ошибка приложения: location.reload() в jsdom
+   всегда «Not implemented», и именно так мы видим, что перезагрузка вызвана */
+let navAttempts = 0;
+vc.on('jsdomError', e => {
+  const m = brief(e);
+  if (/Not implemented: navigation/.test(m)){ navAttempts++; return; }
+  errors.push('jsdomError: ' + m);
+});
 vc.on('error', (...a) => errors.push('console.error: ' + a.join(' ').slice(0, 200)));
 vc.on('warn', (...a) => warns.push(a.join(' ')));
-process.on('uncaughtException', e => errors.push('uncaught: ' + brief(e)));
-process.on('unhandledRejection', e => errors.push('rejection: ' + brief(e)));
+/* эти обработчики мешают процессу упасть — значит, они ОБЯЗАНЫ напечатать
+   причину сразу, иначе ошибка самого стенда выглядит как «тихий успех» */
+process.on('uncaughtException', e => { console.log('!! ошибка стенда:', brief(e)); errors.push('uncaught: ' + brief(e)); });
+process.on('unhandledRejection', e => { console.log('!! ошибка стенда (rejection):', brief(e)); errors.push('rejection: ' + brief(e)); });
 
 let html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 html = html
@@ -141,7 +150,45 @@ const dom = new JSDOM(html, {
       return Promise.reject(new TypeError('нет сети для ' + u.slice(0, 60)));
     };
 
+    /* --- service worker: управляемая подделка. Нужна, чтобы проверить плашку
+       «Доступна новая версия»: её показ теперь зависит от того, остался ли
+       воркер в reg.waiting (т.е. install НЕ дошёл до skipWaiting). --- */
+    const mkTarget = () => {
+      const o = { _h: {}, addEventListener(t, cb){ (o._h[t] = o._h[t] || []).push(cb); },
+                  removeEventListener(){}, fire(t, ev){ (o._h[t]||[]).forEach(cb => cb(Object.assign({type:t}, ev||{}))); } };
+      return o;
+    };
+    const swReg = mkTarget(), swWorker = mkTarget();
+    swReg.installing = null; swReg.waiting = null;
+    const posts = [];
+    swWorker.postMessage = m => posts.push(m);
+    const reloads = { n: 0 };
+    window.__sw = {
+      reg: swReg, worker: swWorker, posts, reloads,
+      /* install отработал и вызвал skipWaiting: воркер активировался сам,
+         reg.waiting остаётся null → показывать кнопку не за чем */
+      settledInstalled(){
+        swReg.installing = swWorker; swReg.waiting = null;
+        swWorker.state = 'installed';
+        swReg.fire('updatefound');          // браузер именно так и сообщает
+        swWorker.fire('statechange');
+        swReg.installing = null;
+        swWorker.state = 'activated';
+        window.navigator.serviceWorker.fire('controllerchange');
+      },
+      /* install застрял (не дошёл до skipWaiting): reg.waiting != null —
+         единственный случай, когда пользователю действительно нужна кнопка */
+      stuckWaiting(){
+        swReg.installing = swWorker; swReg.waiting = swWorker;
+        swWorker.state = 'installed';
+        swReg.fire('updatefound');
+        swWorker.fire('statechange');
+      }
+    };
     try { delete window.navigator.serviceWorker; } catch(e){}
+    const swIface = Object.assign(mkTarget(), { register: () => Promise.resolve(swReg), controller: null });
+    window.__sw.swTarget = swIface;
+    Object.defineProperty(window.navigator, 'serviceWorker', { configurable: true, value: swIface });
     Object.defineProperty(window, 'innerWidth', { value: NARROW ? 420 : 1440, configurable: true });
     Object.defineProperty(window, 'innerHeight', { value: NARROW ? 780 : 900, configurable: true });
     window.matchMedia = q => ({
@@ -456,6 +503,39 @@ click(q('#panelToggle'));
 await wait(120);
 click(q('#panelToggle'));
 check('тумблер панелей и Esc не валят страницу', errors.length === 0, errors.slice(0, 1).join(''));
+
+/* ---------- плашка «Доступна новая версия» ---------- */
+{
+  const btn = q('#updateReady');
+  check('плашка обновления скрыта по умолчанию', btn.hidden === true);
+  /* случай 1: обычный — install сам вызывает skipWaiting (см. sw.js), а оболочка
+     отдаётся network-first → перезагрузка не нужна, кнопка показывать нечего */
+  window.__sw.settledInstalled();
+  await wait(2000);
+  check('после штатной активации SW кнопка НЕ появляется', q('#updateReady').hidden === true,
+    'waiting=' + JSON.stringify(window.__sw.reg.waiting) + ' · posts=' + window.__sw.posts.length);
+
+  /* случай 2: воркер реально застрял в waiting */
+  window.__sw.stuckWaiting();
+  await wait(2000);
+  check('если SW застрял в waiting — кнопка появляется', q('#updateReady').hidden === false);
+
+  /* клик: сначала skipWaiting сообщением, затем ровно одна перезагрузка
+     (перехватить location.reload() в jsdom нельзя — он непереназначаем,
+     поэтому сигналом служит попытка навигации) */
+  check('перезагрузка не вызвана без нужды', navAttempts === 0, 'навигаций: ' + navAttempts);
+  q('#updateReady').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(120);
+  check('клик передаёт управление новому воркеру (postMessage skipWaiting)',
+    window.__sw.posts[0] === 'skipWaiting', JSON.stringify(window.__sw.posts));
+  check('клик прячет плашку сразу', q('#updateReady').hidden === true);
+  await wait(800);
+  check('страница перезагружается ровно один раз', navAttempts === 1, 'навигаций: ' + navAttempts);
+  window.__sw.swTarget.fire('controllerchange');
+  await wait(120);
+  check('controllerchange не зацикливает перезагрузку', navAttempts === 1, 'навигаций: ' + navAttempts);
+  window.__sw.posts.length = 0;
+}
 
 console.log('\n— console.error / window errors —');
 console.log(errors.length ? [...new Set(errors)].slice(0, 6).join('\n') : 'нет');

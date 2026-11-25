@@ -206,6 +206,9 @@ input[type=range]:focus-visible{outline:2px solid var(--acc);outline-offset:4px}
   #dateBox{min-width:78px;font-size:12px}
   #speedBox{display:none}
   #alertBanner{top:auto;bottom:170px;font-size:12px;padding:8px 14px}
+  /* на узком экране bottom:96px занят переключателем режимов (#modeTabs) —
+     уводим плашку обновления наверх, под #mobileBar */
+  #updateReady{bottom:auto;top:56px;left:50%}
   #buildStamp{display:none}
   /* на телефоне показ/скрытие — через тумблер в #mobileBar */
   #chartShowBtn{display:none!important}
