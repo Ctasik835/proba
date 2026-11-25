@@ -2149,12 +2149,50 @@ function makeDraggable(element, handleSelector){
   handle.addEventListener('mousedown',onDown);
 }
 
+function makeResizable(element, minW=150, minH=100){
+  const el = $(element);
+  if(!el) return;
+  const resizer = document.createElement('div');
+  resizer.className = 'resizer';
+  el.appendChild(resizer);
+
+  let isResizing=false, startX=0, startY=0, startW=0, startH=0;
+
+  const onDown=(e)=>{
+    if(e.button!==0) return;
+    isResizing=true;
+    startX=e.clientX; startY=e.clientY;
+    const cs=getComputedStyle(el);
+    startW=parseFloat(cs.width)||el.offsetWidth;
+    startH=parseFloat(cs.height)||el.offsetHeight;
+    el.style.right=''; el.style.bottom='';
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+    e.preventDefault();
+  };
+  const onMove=(e)=>{
+    if(!isResizing) return;
+    const w=Math.max(minW, startW+(e.clientX-startX));
+    const h=Math.max(minH, startH+(e.clientY-startY));
+    el.style.width=w+'px'; el.style.height=h+'px';
+  };
+  const onUp=()=>{
+    isResizing=false;
+    document.removeEventListener('mousemove',onMove);
+    document.removeEventListener('mouseup',onUp);
+  };
+  resizer.addEventListener('mousedown',onDown);
+}
+
 function makeWindowsDraggable(){
   makeDraggable('sidebar','header:first-of-type');
+  makeResizable('sidebar', 200, 200);
   makeDraggable('chartPanel','.head');
+  makeResizable('chartPanel', 250, 150);
   makeDraggable('topbar');
   makeDraggable('timeline');
   makeDraggable('alertBanner');
+  makeDraggable('statusBar');
 }
 
 (async function boot(){

@@ -156,3 +156,8 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
 .draggable{user-select:none}
 .draggable-handle{cursor:move}
 .draggable-handle:active{cursor:grabbing}
+
+/* Resize маркер в правом нижнем углу окна */
+.resizer{position:absolute;right:0;bottom:0;width:10px;height:10px;
+  cursor:nwse-resize;z-index:10001;opacity:0.4}
+.resizer:hover{opacity:0.8}
