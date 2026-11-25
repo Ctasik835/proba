@@ -318,3 +318,30 @@ test('статус-окно: ниже переключателя слоёв, н�
   assert.match(html, /<div id="statusBar"[^>]*class="drag-handle"/,
     'у статуса нет .drag-handle — непонятно, что его можно тащить');
 });
+
+/* ---------- плашка «Доступна новая версия» ---------- */
+test('плашка обновления SW не показывается без необходимости', () => {
+  const script = html.slice(html.indexOf('<button id="updateReady"'), html.indexOf('</script>', html.indexOf('<button id="updateReady"')));
+  assert.ok(script.length > 200, 'не найден скрипт обновления рядом с #updateReady');
+  /* решение принимать по reg.waiting, а не по факту 'installed':
+     install в sw.js сам вызывает skipWaiting(), так что 'installed' наступает
+     раньше активации — на прошлой логике кнопка вылезала на каждой первой
+     загрузке после изменения sw.js, хотя перезагрузка была не нужна */
+  assert.match(script, /if \(reg && reg\.waiting\)/, 'нет проверки reg.waiting — кнопка будет всплывать зря');
+  assert.match(script, /setTimeout\(\(\) => \{ if \(reg && reg\.waiting\)[\s\S]{0,60}\}, 1500\)/,
+    'нет выдержки перед показом (нужно, чтобы skipWaiting успел отработать)');
+  /* прежний обработчик 'installed' + controller больше не является основанием */
+  assert.ok(!/if \(nw\.state === 'installed' && navigator\.serviceWorker\.controller\)/.test(script),
+    'старое условие по state+controller осталось — именно оно показывало кнопку просто так');
+  /* клик должен добить зависший waiting, иначе reload() оставил бы его висеть */
+  assert.match(script, /waiting\.postMessage\('skipWaiting'\)/, 'клик не передаёт управление новому воркеру');
+  assert.match(script, /reloaded = true/, 'нет защиты от повторной перезагрузки');
+  /* на sw.js-стороне обработчик сообщения обязан быть */
+  assert.match(sw, /if \(e\.data === 'skipWaiting'\) self\.skipWaiting\(\)/);
+  assert.match(sw, /\.then\(\(\) => self\.skipWaiting\(\)\)/, 'install не вызывает skipWaiting — обновлений не дождаться');
+  /* плашка на узком экране не должна ложиться на #modeTabs (bottom:96px) */
+  const css = read('style.css');
+  const narrow = css.slice(css.indexOf('@media(max-width:900px)'));
+  assert.match(narrow.slice(0, 1400), /#updateReady\{[^}]*bottom:auto[^}]*top:56px/,
+    'на узком экране плашка обновления перекрывает переключатель режимов');
+});
