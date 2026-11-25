@@ -392,6 +392,13 @@ click(q('.scenBtn[data-scen="reset"]'));
 await wait(400);
 
 /* ---------- учебный сброс ---------- */
+/* подглядываем за созданием поповера: L.popup возвращает объект, у которого
+   потом проверяем offset (именно он отвечает «над маркером окно или под») */
+const popups = [];
+{
+  const orig = window.L.popup;
+  window.L.popup = function(...a){ const p = orig.apply(this, a); popups.push(p); return p; };
+}
 const t0 = Date.now();
 click(q('.scenBtn[data-scen="release"]'));
 await wait(1400);
@@ -405,11 +412,34 @@ check('сброс: в баннере числа нормальные', /м³\/с
   q('#alertBanner').textContent.slice(0, 70).replace(/\s+/g, ' '));
 check('сброс: остальные станции заблокированы', qa('.hppItem:disabled').length === 5, qa('.hppItem:disabled').length);
 check('сброс: паспорт станции с балансом', /Баланс воды/.test(q('#details').textContent) && !/NaN/.test(q('#details').textContent));
+{
+  await wait(900);                     // окно открывается по таймеру через 1 с после старта
+  const pop = popups[popups.length - 1];
+  check('сброс: окно у плотины открыто', !!pop && !!q('#map .leaflet-popup'),
+    'поповеров создано: ' + popups.length);
+  const oy = pop ? (pop.options.offset[1] ?? null) : null;
+  /* Leaflet цепляет контейнер за НИЖНИЙ край (style.bottom = -(y + offset.y)),
+     поэтому «под маркером» = offset.y не меньше высоты самого окна */
+  const h = pop && pop._container ? pop._container.getBoundingClientRect().height : 0;
+  check('сброс: окно ПОД маркером (смещено на собственную высоту, а не вверх)',
+    oy !== null && oy >= h && oy > 0, 'offset.y=' + oy + ' · высота окна=' + h);
+  check('сброс: у окна перевёрнутый хвост (класс pop-under)',
+    !!(pop && pop._container && /pop-under/.test(pop._container.className)),
+    pop && pop._container && pop._container.className);
+  check('сброс: позиция пересчитана Leaflet-ом (bottom = -(y + offset.y))',
+    !!(pop && pop._container) &&
+    Math.abs(parseFloat(pop._container.style.bottom) + (pop._map.latLngToLayerPoint(pop.getLatLng()).y + oy)) < 2,
+    pop && pop._container && 'bottom=' + pop._container.style.bottom + ' · offset.y=' + oy);
+  check('сброс: окно привязано к точке плотины',
+    !!(pop && Math.abs(pop.getLatLng().lat - 60.67992) < 1e-3), pop && JSON.stringify(pop.getLatLng()));
+}
 check('сброс: анимация не роняет страницу', Date.now() - t0 > 1000 && errors.length === 0,
   'elapsed=' + (Date.now() - t0) + 'мс · ошибок: ' + errors.length);
 click(q('.scenBtn[data-scen="normal"]'));
 await wait(400);
 check('сброс выключен: блок снят', qa('.hppItem:disabled').length === 0);
+check('сброс выключен: окно плотины закрыто', !q('#map .leaflet-popup'),
+  q('#map .leaflet-popup') ? 'поповер всё ещё на карте' : 'нет поповера');
 check('сброс выключен: график вернулся на мощность',
   (chart('chartPowerC')?.data.datasets.length || 0) === 1 &&
   chart('chartPowerC').options.plugins.legend.display === false);

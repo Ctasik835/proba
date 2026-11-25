@@ -345,3 +345,37 @@ test('плашка обновления SW не показывается без 
   assert.match(narrow.slice(0, 1400), /#updateReady\{[^}]*bottom:auto[^}]*top:56px/,
     'на узком экране плашка обновления перекрывает переключатель режимов');
 });
+
+/* ---------- расположение окна учебного сброса ---------- */
+test('поповер учебного сброса ставится ПОД маркером плотины', () => {
+  const i = app.indexOf('async function startRelease');
+  const block = app.slice(i, app.indexOf(".classList.add('show')", i));
+  assert.ok(i > 0 && block.length > 200, 'startRelease не найден');
+  assert.match(block, /className: 'breakPop pop-under'/,
+    'нет класса pop-under — хвост останется снизу, и окно будет смотреть «на маркер»');
+  assert.match(block, /offset: \[0, 12\]/, 'нужен стартовый зазор: высота меряется после вёрстки');
+  assert.match(block, /placePopupUnder\(pop\)/, 'смещение по высоте не применяется');
+  assert.match(block, /RELEASE\.popup = pop/, 'поповер не запоминается → его нечем закрывать');
+
+  /*helper*/
+  const helper = app.slice(app.indexOf('function placePopupUnder'), app.indexOf('async function startRelease'));
+  assert.ok(helper.length > 100, 'placePopupUnder не найден');
+  assert.match(helper, /getBoundingClientRect\(\)\.height\s*\|\|\s*el\.offsetHeight/,
+    'высота контейнера не измеряется — смещение выйдет произвольным');
+  assert.match(helper, /pop\.options\.offset = off;[\s\S]{0,40}pop\.update\(\)/,
+    'Leaflet пересчитывает позицию только в update()');
+  assert.ok(!/\.setOffset\(/.test(helper),
+    'setOffset() в Leaflet 1.9 не существует — будет TypeError прямо на сбросе');
+
+  /* окно обязано закрываться вместе со сценарием */
+  const stop = app.slice(app.indexOf('function stopRelease'), app.indexOf('function releaseDetailsHTML'));
+  assert.match(stop, /map\.closePopup\(RELEASE\.popup\)/,
+    'после выключения сценария окно сброса остаётся висеть на карте');
+
+  /* CSS-переворот хвоста */
+  const css = read('style.css');
+  assert.match(css, /\.leaflet-popup\.pop-under \.leaflet-popup-tip-container\{[^}]*top:-20px[^}]*bottom:auto/,
+    'полоска хвоста не перенесена на верхний край контейнера');
+  assert.match(css, /\.leaflet-popup\.pop-under \.leaflet-popup-tip\{[^}]*margin:10px auto 0/,
+    'ромбик хвоста не перевёрнут — хвост будет смотреть вниз');
+});
