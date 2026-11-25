@@ -258,3 +258,32 @@ test('Chart.js: type лежит в КОРНЕ конфига, а не в options
   assert.doesNotMatch(opts[1], /(^|[,{\s])type\s*:/,
     'type внутри options — Chart.js его игнорирует, график останется без контроллера');
 });
+
+/* ---------- скрытие/показ графиков ---------- */
+test('графики скрываются и показываются через одну функцию', () => {
+  /* Причина, по которой «скрыть» раньше не работало: selectHPP вслепую
+     вешал .show, и панель возвращалась при первом же выборе станции.
+     Комментарии счищаем — иначе текст самого объяснения попадёт в проверку. */
+  const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.doesNotMatch(code, /\$\('chartPanel'\)\.classList\.(add|remove|toggle)\(/,
+    'прямая работа с .show/.open у #chartPanel мимо setChartsVisible');
+  assert.match(app, /const CHARTS_KEY = 'ges_charts_v1';/,
+    'намерение пользователя не запоминается — перезагрузка вернёт графики');
+  assert.match(app, /function chartsWanted\(\)/);
+  assert.match(app, /function setChartsVisible\(on, opts\)/);
+  for (const id of ['chartHideBtn', 'chartShowBtn']){
+    assert.ok(html.includes(`id="${id}"`), `в разметке нет #${id}`);
+    assert.match(app, new RegExp("\\$\\('" + id + "'\\)"), `app.js не использует #${id}`);
+  }
+  /* ✕ и пилюля — <button type="button">: внутри формы/на клавиатуре submit не нужен */
+  for (const id of ['chartHideBtn', 'chartShowBtn']){
+    const tag = html.slice(html.indexOf(`id="${id}"`) - 260, html.indexOf(`id="${id}"`) + 260);
+    assert.match(tag, /<button[^>]+type="button"/, `#${id} — кнопка без type="button"`);
+  }
+  /* панель при скрытии не должна оставаться «ящиком» на узком экране */
+  assert.match(app, /panel\.classList\.toggle\('open', on && NARROW\(\)\)/,
+    '.open на узких экранах не синхронизируется с show');
+  /* canvas в display:none = 0×0: без resize() после показа будут пустые рамки */
+  const body = app.slice(app.indexOf('function setChartsVisible'));
+  assert.match(body.slice(0, 1400), /resizeCharts\(\)/, 'при показе графиков не вызывается resize');
+});
