@@ -287,3 +287,34 @@ test('графики скрываются и показываются через
   const body = app.slice(app.indexOf('function setChartsVisible'));
   assert.match(body.slice(0, 1400), /resizeCharts\(\)/, 'при показе графиков не вызывается resize');
 });
+
+/* ---------- статус-окно: не мешает слоям и переставляется ---------- */
+test('статус-окно: ниже переключателя слоёв, не перекрывает его и двигается', () => {
+  const css = read('style.css');
+  const rule = css.match(/#statusBar\{([^}]*)\}/);
+  assert.ok(rule, 'нет правила #statusBar');
+  const decl = rule[1];
+
+  /* Leaflet кладёт свои контролы в .leaflet-top (z-index:1000), а #statusBar в DOM
+     идёт после #map: при z-index >= 1000 он лежал поверх раскрытого списка слоёв
+     и перехватывал клики по радиокнопкам. */
+  const z = /z-index:\s*(\d+)/.exec(decl);
+  assert.ok(z, 'у #statusBar нет z-index — порядок наложений непредсказуем');
+  assert.ok(+z[1] < 1000,
+    `z-index:${z[1]} не ниже .leaflet-top (1000) — статус снова перекроет выбор слоя`);
+  const top = /(?:^|[;{\s])top:\s*(\d+)px/.exec(decl);
+  assert.ok(top && +top[1] >= 120,
+    `top:${top ? top[1] : 'нет'}px — статус всё ещё там, куда разворачивается список слоёв`);
+  assert.match(decl, /touch-action:\s*none/, 'без touch-action палец поведёт страницу, а не окно');
+
+  /* двигается той же машинерией окон, но без закрепления размеров */
+  assert.match(app, /makeDraggable\('statusBar', null, \{ moveOnly:true \}\)/,
+    'статус-окно не подключено к перетаскиванию');
+  assert.match(app, /const WINDOWS = \[[^\]]*'statusBar'[^\]]*\]/,
+    'статус не в списке окон → его позиция не восстановится после перезагрузки');
+  const apply = app.slice(app.indexOf('function applyLayout'));
+  assert.match(apply.slice(0, 900), /if \(box\.moveOnly\)\{[\s\S]{0,240}?el\.style\.width = ''; el\.style\.height = '';/,
+    'moveOnly обязан пропускать ширину/высоту: текст статуса меняет длину');
+  assert.match(html, /<div id="statusBar"[^>]*class="drag-handle"/,
+    'у статуса нет .drag-handle — непонятно, что его можно тащить');
+});

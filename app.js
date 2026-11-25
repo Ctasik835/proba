@@ -2520,6 +2520,8 @@ function setChartsVisible(on, opts){
 }
 
 const LAYOUT_KEY = 'ges_layout_v1';
+/* окна, помнящие своё место; statusBar — только позицию (см. moveOnly) */
+const WINDOWS = ['sidebar', 'chartPanel', 'statusBar'];
 const NARROW = () => window.matchMedia && window.matchMedia('(max-width:900px)').matches;
 
 function saveLayout(id, box){
@@ -2541,6 +2543,17 @@ function clearLayout(id){
 }
 function clampBox(el, box){
   const W = window.innerWidth, H = window.innerHeight;
+  /* moveOnly — элементы с размером «по содержимому» (статус): их нельзя ни
+     растягивать по сохранённой ширине, ни обрезать половиной за краем */
+  if (box.moveOnly){
+    const w = Math.min(box.w || el.offsetWidth, W - 16);
+    const h = Math.min(box.h || el.offsetHeight, H - 16);
+    return Object.assign({}, box, {
+      w, h,
+      left: Math.max(8, Math.min(box.left, W - w - 8)),
+      top:  Math.max(8, Math.min(box.top,  H - h - 8))
+    });
+  }
   const w = Math.min(Math.max(box.w || el.offsetWidth, 220), W - 16);
   const h = Math.min(Math.max(box.h || el.offsetHeight, 140), H - 16);
   return {
@@ -2554,6 +2567,12 @@ function applyLayout(id, el, box){
   el.style.right = 'auto'; el.style.bottom = 'auto';
   el.style.left = Math.round(box.left) + 'px';
   el.style.top  = Math.round(box.top) + 'px';
+  if (box.moveOnly){
+    /* только координаты: ширина/высота остаются вычисленными браузером, иначе
+      .statusText в статус-окне обрезался бы до записанных когда-то пикселей */
+    el.style.width = ''; el.style.height = '';
+    return;
+  }
   el.style.width = Math.round(box.w) + 'px';
   el.style.height = Math.round(box.h) + 'px';
   /* таймлайн подстроен под ширину сайдбара через CSS-переменную */
@@ -2562,7 +2581,8 @@ function applyLayout(id, el, box){
 
 const isButton = el => !!(el && el.closest && el.closest('button'));
 
-function makeDraggable(id, handleSelector){
+function makeDraggable(id, handleSelector, opts){
+  const o = opts || {};
   const el = $(id);
   if (!el) return;
   const handle = handleSelector ? el.querySelector(handleSelector) : el;
@@ -2585,15 +2605,18 @@ function makeDraggable(id, handleSelector){
       el.style.right = 'auto'; el.style.bottom = 'auto';
       el.style.left = left + 'px';
       el.style.top = top + 'px';
-      el.style.width = r.width + 'px';
-      el.style.height = r.height + 'px';
+      if (!o.moveOnly){
+        el.style.width = r.width + 'px';
+        el.style.height = r.height + 'px';
+      }
     };
     const up = () => {
       el.classList.remove('dragging');
       handle.removeEventListener('pointermove', move);
       handle.removeEventListener('pointerup', up);
       const box = el.getBoundingClientRect();
-      const c = clampBox(el, { left: box.left, top: box.top, w: box.width, h: box.height });
+      const c = clampBox(el, { left: box.left, top: box.top, w: box.width, h: box.height,
+                                moveOnly: !!o.moveOnly });
       applyLayout(id, el, c);
       saveLayout(id, c);
     };
@@ -2656,7 +2679,7 @@ function makeResizable(id, minW = 220, minH = 150){
 
 function restoreWindows(){
   const saved = readLayout();
-  ['sidebar','chartPanel'].forEach(id => {
+  WINDOWS.forEach(id => {
     const el = $(id);
     if (!el) return;
     el.querySelectorAll('.resizer').forEach(r => r.remove());
@@ -2676,6 +2699,8 @@ function makeWindowsDraggable(){
   makeResizable('sidebar', 240, 240);
   makeDraggable('chartPanel', '.drag-handle');
   makeResizable('chartPanel', 280, 180);
+  /* статус-окно: двигаем, но не ресайзим (moveOnly) — размер у него по тексту */
+  makeDraggable('statusBar', null, { moveOnly:true });
   /* смена размера окна / поворот телефона — пересобрать раскладку */
   let t = 0;
   window.addEventListener('resize', () => {

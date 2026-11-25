@@ -148,10 +148,19 @@ const dom = new JSDOM(html, {
       matches: /max-width:\s*900px/.test(q) ? NARROW : /prefers-reduced-motion/.test(q) ? REDUCE : false,
       media: q, addEventListener(){}, removeEventListener(){}, addListener(){}, removeListener(){}
     });
+    const W_BY_ID = { sidebar: 330, chartPanel: 450, statusBar: 210 };
     window.Element.prototype.getBoundingClientRect = function(){
-      const w = this.id === 'sidebar' ? 330 : this.id === 'chartPanel' ? 450 : 240;
-      return { left: 12, top: 64, right: 12 + w, bottom: 300, width: w, height: 236, x: 12, y: 64 };
+      /* учёт inline left/top: без этого перетаскивание окон не проверить —
+         makeDraggable читает геометрию именно этим методом */
+      const num = v => (typeof v === 'string' && /px$/.test(v)) ? parseFloat(v) : NaN;
+      const st = this.style || {};
+      const left = isNaN(num(st.left)) ? 12 : num(st.left);
+      const top  = isNaN(num(st.top)) ? 64 : num(st.top);
+      const w = W_BY_ID[this.id] || 240;
+      return { left, top, right: left + w, bottom: top + 236, width: w, height: 236, x: left, y: top };
     };
+    window.Element.prototype.setPointerCapture = window.Element.prototype.setPointerCapture || function(){};
+    window.Element.prototype.releasePointerCapture = window.Element.prototype.releasePointerCapture || function(){};
     window.ResizeObserver = class { observe(){} unobserve(){} disconnect(){} };
     /* jsdom запрещает localStorage на file:// (opaque origin) — а приложению он
        нужен: кэш снимка, раскладка окон и намерение «графики скрыты». Без стаба
@@ -185,6 +194,14 @@ function check(name, cond, extra){
   if (!cond) failed++;
   console.log((cond ? 'ok   ' : 'FAIL ') + name + (extra !== undefined ? '  → ' + String(extra).slice(0, 150) : ''));
 }
+
+/* Страховка: обработчики ниже ловят uncaught/unhandled и не дают процессу
+   упасть — без таймера стенд мог бы висеть вместо того, чтобы показать провал. */
+const watchdog = setTimeout(() => {
+  console.error('\nТАЙМАУТ: стенд не дошёл до конца (см. errors ниже)');
+  console.log(errors.slice(0, 3).join('\n'));
+  process.exit(1);
+}, 100000);
 
 await wait(900);
 
@@ -350,6 +367,78 @@ check('сброс выключен: график вернулся на мощн�
   (chart('chartPowerC')?.data.datasets.length || 0) === 1 &&
   chart('chartPowerC').options.plugins.legend.display === false);
 
+/* ---------- статус-окно: перетаскивание и возврат ---------- */
+if (NARROW){
+  /* на узких экранах статус-окно сознательно display:none (его роль играет
+     #mobileBar), а makeDraggable там ничего не двигает — проверяем, что
+     перетаскивание не оставляет «призрачной» позиции */
+  check('на узком экране статус скрыт и не таскается',
+    !q('#statusBar').classList.contains('dragging') && !q('#statusBar').style.left,
+    'left=' + JSON.stringify(q('#statusBar').style.left));
+} else {
+  const sb = q('#statusBar');
+  const rectBefore = { left: sb.style.left, top: sb.style.top };
+  const pe = (type, x, y) => {
+    const ev = new window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+    Object.defineProperty(ev, 'pointerId', { value: 1 });
+    Object.defineProperty(ev, 'button', { value: 0 });
+    return ev;
+  };
+  const r0 = sb.getBoundingClientRect();
+  const grab = [r0.left + 30, r0.top + 8];
+  sb.dispatchEvent(pe('pointerdown', grab[0], grab[1]));
+  sb.dispatchEvent(pe('pointermove', grab[0] + 860, grab[1] + 330));
+  sb.dispatchEvent(pe('pointerup', grab[0] + 860, grab[1] + 330));
+  const saved = JSON.parse(window.__store.get('ges_layout_v1') || '{}').statusBar;
+  check('статус-окно перетаскивается за любую точку кроме кнопки',
+    sb.style.left !== rectBefore.left && sb.style.top !== rectBefore.top && !!saved,
+    'inline: left=' + (sb.style.left || 'нет') + ' top=' + (sb.style.top || 'нет') + ' (тащили на +860/+330) ·' +
+    ' · сохранено: ' + JSON.stringify(saved && { left: Math.round(saved.left), top: Math.round(saved.top), moveOnly: saved.moveOnly }));
+  check('перетащенное окно не закреплено по размеру (текст статуса живой)',
+    sb.style.width === '' && sb.style.height === '',
+    'width=' + JSON.stringify(sb.style.width) + ' height=' + JSON.stringify(sb.style.height));
+  check('окно осталось в пределах экрана (clamp)',
+    saved && saved.left >= 8 && saved.top >= 8 &&
+    saved.left + saved.w <= 1440 - 8 && saved.top + saved.h <= 900 - 8,
+    saved && JSON.stringify({ l: Math.round(saved.left), t: Math.round(saved.top), w: Math.round(saved.w), h: Math.round(saved.h) }));
+
+  /* за край экрана выпустить нельзя */
+  sb.dispatchEvent(pe('pointerdown', grab[0], grab[1]));
+  sb.dispatchEvent(pe('pointermove', 9000, 9000));
+  sb.dispatchEvent(pe('pointerup', 9000, 9000));
+  {
+    const r = sb.getBoundingClientRect();
+    const saved2 = JSON.parse(window.__store.get('ges_layout_v1') || '{}').statusBar;
+    check('окно нельзя утащить за край экрана (clamp на отпускании)',
+      !!saved2 && saved2.left + saved2.w <= 1440 - 8 && saved2.top + saved2.h <= 900 - 8 && saved2.left >= 8,
+      saved2 ? 'left=' + Math.round(saved2.left) + ' top=' + Math.round(saved2.top) +
+               ' (right=' + Math.round(r.right) + ')' : 'позиция не сохранена');
+  }
+
+  /* кнопка ⟳ внутри окна — не ручка перетаскивания */
+  const rb = q('#refreshBtn');
+  const before = sb.style.left;
+  rb.dispatchEvent(pe('pointerdown', 1100, 200));
+  rb.dispatchEvent(pe('pointermove', 800, 600));
+  rb.dispatchEvent(pe('pointerup', 800, 600));
+  check('⟳ не перетаскивает окно (клик по кнопке остаётся кликом)', sb.style.left === before,
+    before + ' → ' + sb.style.left);
+
+  /* двойной клик — возврат на место */
+  const dbl = new window.MouseEvent('dblclick', { bubbles: true, cancelable: true });
+  Object.defineProperty(dbl, 'target', { value: sb });
+  sb.dispatchEvent(dbl);
+  check('двойной клик возвращает окно в CSS-позицию',
+    sb.style.left === '' && sb.style.top === '' && sb.style.position === '',
+    'left=' + JSON.stringify(sb.style.left) + ' position=' + JSON.stringify(sb.style.position));
+  check('после возврата запись о позиции удалена из ges_layout_v1',
+    !JSON.parse(window.__store.get('ges_layout_v1') || '{}').statusBar,
+    window.__store.get('ges_layout_v1'));
+  check('манипуляции с окном не сломали статус',
+    /history|forecast|climate|онлайн|офлайн|кэш/i.test(q('#statusText').textContent) &&
+    !/NaN|undefined/.test(q('#statusText').textContent), q('#statusText').textContent.slice(0, 60));
+}
+
 /* ---------- смена режима ---------- */
 click(q('#modeTabs button[data-mode="forecast"]'));
 await wait(2500);
@@ -372,6 +461,7 @@ console.log('\n— console.error / window errors —');
 console.log(errors.length ? [...new Set(errors)].slice(0, 6).join('\n') : 'нет');
 console.log('\n— предупреждения (уникальные, первые 6) —');
 console.log([...new Set(warns)].slice(0, 6).join('\n') || 'нет');
+clearTimeout(watchdog);
 console.log('\nИТОГО провалов: ' + failed);
 dom.window.close();
 process.exit(failed ? 1 : 0);
