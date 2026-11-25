@@ -1,6 +1,6 @@
 {
   "name": "ges-map",
-  "version": "46.0.0",
+  "version": "47.0.0",
   "private": true,
   "description": "Интерактивная карта ГЭС: рельеф, климат, гидрология, сценарии прорыва плотин",
   "type": "commonjs",
@@ -9,7 +9,9 @@
     "test": "node --test",
     "lint": "node --check app.js && node --check model.js && node --check sw.js && node --check version.js && node --check climate-data.js && node --check reservoirs-data.js && node --check rivers-data.js && node --check terrain-data.js",
     "icons": "python3 tools/make-icons.py",
-    "version:check": "node -e \"const v=require('./version.js').APP_VERSION; const p=require('./package.json').version; console.log(v, p)\""
+    "version:check": "node -e \"const {APP_VERSION}=require('./version.js'); const {version}=require('./package.json'); const want='v'+version.split('.')[0]; if(APP_VERSION!==want){console.error(APP_VERSION+' != '+want); process.exit(1)} console.log('APP_VERSION='+APP_VERSION)\"",
+    "smoke": "node tools/smoke.mjs",
+    "smoke:offline": "SMOKE_OFFLINE=1 node tools/smoke.mjs"
   },
   "engines": {
     "node": ">=20"

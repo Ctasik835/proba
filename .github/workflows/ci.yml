@@ -33,5 +33,5 @@ jobs:
             echo "::error::icons/*.png не совпадают с tools/make-icons.py — перегенерируйте их (npm run icons)";
             exit 1;
           }
-      - name: Все локальные ресурсы из index.html существуют
-        run: node --test tests/site.test.mjs
+      - name: Номер сборки не разъезжается (version.js ↔ package.json)
+        run: npm run version:check
