@@ -594,7 +594,11 @@ const RELEASE = {
     [1000,60.686019,28.955504], [1500,60.689338,28.951666],
     [2000,60.692894,28.948601], [2500,60.696733,28.946009],
     [3000,60.699537,28.939458]
-  ]
+  ],
+  /* состояние активного сценария: маркеры участков и окно у плотины.
+     Держим здесь (а не в S), потому что чистит их stopRelease() */
+  reachMarkers: null,
+  popup: null
 };
 
 /* Алгоритм — model.js:releaseCalculate, копию с вырезанной валидацией
@@ -605,6 +609,25 @@ const RELEASE = {
 function fmtClock(sec){
   const hh = Math.floor(sec / 3600), mm = Math.floor(sec % 3600 / 60);
   return (hh ? hh + 'ч ' : '') + mm + 'м';
+}
+
+/* Leaflet привязывает поповер НИЖНИМ краем (в _updatePosition пишется
+   style.bottom = -(y + offset.y)), поэтому любое окно по умолчанию висит НАД
+   точкой. На Перовской при учебном сбросе именно там стоят маркер плотины и
+   подпись станций, и окно их накрывало. Решается сдвигом на собственную
+   высоту: offset.y = высота контейнера + зазор на «хвост», а сам хвост
+   переворачивает CSS-класс .pop-under (см. style.css).
+   setOffset() в Leaflet 1.9 нет — пишем опцию и зовём update(). */
+const POPUP_TIP_GAP = 7;      // дефолтный offset.y у L.popup
+function placePopupUnder(pop){
+  const el = pop.getElement && pop.getElement();
+  if (!el) return false;
+  const h = el.getBoundingClientRect().height || el.offsetHeight || 0;
+  const off = [0, h + POPUP_TIP_GAP];
+  if (String(pop.options.offset) === String(off)) return false;   // без дребезга на rAF
+  pop.options.offset = off;
+  pop.update();
+  return true;
 }
 
 async function startRelease(){
@@ -649,7 +672,8 @@ async function startRelease(){
 
   /* паспорт сценария у плотины — числа из расчёта, а не прописанные в разметке */
   setTimeout(() => {
-    L.popup({ maxWidth: 300, autoPan: false, closeButton: true, className: 'breakPop' })
+    const pop = L.popup({ maxWidth: 300, autoPan: false, closeButton: true,
+                          className: 'breakPop pop-under', offset: [0, 12] })
       .setLatLng([h.lat, h.lon])
       .setContent(`<b style="color:#31c9ff">📤 ДОПОЛНИТЕЛЬНЫЙ СБРОС — учебный сценарий</b><br>
         Объём источника: <b>${fmtNum(res.volume,0)} м³</b> (${fmtNum(p.cfg.area_m2,0)} м² × ${fmtNum(p.cfg.mean_drawdown_m,2)} м)<br>
@@ -657,8 +681,13 @@ async function startRelease(){
         Фоновый расход Q₀: <b>${fmtNum(res.bg,2)} м³/с</b> (медиана поста 72007, 2008–2012)<br>
         Трансформация: ${res.tau.length} участков по ~${fmtNum(avgReach(p),0)} м, каскад линейных резервуаров, c=${fmtNum(p.cfg.speed_parameter_ms,0)} м/с<br>
         <span style="color:#ffb02e;font-size:10px">Расходы рассчитаны каскадной линейной моделью (учебно).
-        Зона затопления не рассчитывалась.</span>`)
-      .openOn(map);
+        Зона затопления не рассчитывалась.</span>`);
+    RELEASE.popup = pop;
+    pop.openOn(map);
+    /* высота известна только после вёрстки контента: меряем сейчас и ещё раз
+       на следующем кадре (шрифты, переносы) — дальше окно не дёргается */
+    placePopupUnder(pop);
+    requestAnimationFrame(() => { if (RELEASE.popup === pop) placePopupUnder(pop); });
   }, 1000);
 
   $('alertBanner').classList.add('show');
@@ -735,6 +764,12 @@ function releaseStep(tNow){
 function stopRelease(){
   S.release = null;
   clear(layerFlood); clear(layerFloodZone);
+  /* поповер не слой в нашей группе — clear() его не снимает, иначе окно
+     «учебного сброса» висело на карте и после выключения сценария */
+  if (RELEASE.popup){
+    try { map.closePopup(RELEASE.popup); } catch(e){}
+    RELEASE.popup = null;
+  }
   $('alertBanner').classList.remove('show');
   if (RELEASE.reachMarkers) RELEASE.reachMarkers = null;
   /* панель деталей после сценария оставалась «сбросовой» — возвращаем паспорт */
