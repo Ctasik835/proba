@@ -231,3 +231,30 @@ test('в UI не осталось «сырых» toFixed для подписей
   assert.deepEqual(offenders.map(o => `${o.n}: ${o.line.trim()}`), [],
     'строки с locale-форматом пропущены');
 });
+
+/* ---------- конфигурация графиков (regression v46 → v47) ---------- */
+test('Chart.js: type лежит в КОРНЕ конфига, а не в options', () => {
+  /* Chart.js v4 берёт тип контроллера из config.type. Если его занести только
+     в options, конструктор молча создаёт объект без контроллера, а падает уже
+     на chart.update() — сообщением `"undefined" is not a registered
+     controller.`. Так как update() вызывается из render(), rAF-анимаций и
+     таймера, от одного пропуска валили графики, волна прорыва, перемотка, а
+     «учебный сброс» начинал лагать (исключение в каждом кадре). */
+  const calls = [...app.matchAll(/new Chart\(([^\n]*)\);/g)].map(m => m[1]);
+  assert.ok(calls.length >= 2, 'ни одного new Chart — правка ушла из app.js?');
+  for (const arg of calls){
+    assert.doesNotMatch(arg, /options:\s*\{/,
+      'options литералом внутри new Chart: type легко потерять — ' + arg.trim());
+    assert.match(arg, /,\s*[A-Za-z_$][\w$]*\(/,
+      'config обязан приходить из chartConfig(kind), где type на верхнем уровне: ' + arg.trim());
+  }
+  const helper = app.match(/const chartConfig = kind => \(\{([\s\S]*?)\n {2}\}\);/);
+  assert.ok(helper, 'chartConfig не найден');
+  assert.match(helper[1], /^\s*type:'line',/, "первым ключом chartConfig обязан быть type:'line'");
+  assert.match(helper[1], /options: chartOptions\(kind\)/, 'chartConfig не передаёт options');
+
+  const opts = app.match(/function chartOptions\(kind\)\{([\s\S]*?)\n {2}\}/);
+  assert.ok(opts, 'chartOptions не найден');
+  assert.doesNotMatch(opts[1], /(^|[,{\s])type\s*:/,
+    'type внутри options — Chart.js его игнорирует, график останется без контроллера');
+});

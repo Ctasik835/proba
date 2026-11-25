@@ -625,7 +625,8 @@ async function startRelease(){
     showStatusMsg('Сценарий сброса: ' + e.message);
     return;
   }
-  S.release = { res, start: performance.now(), dur: REDUCED_MOTION ? 1500 : 30 * 1000 };  // 12 ч → 30 с
+  /* dur — вся анимация; 12 ч модельного времени укладываем в 30 с. */
+  S.release = { res, start: performance.now(), dur: REDUCED_MOTION ? 1500 : 30 * 1000, lastN: -1, lastTips: 0 };
   clear(layerFlood); clear(layerFloodZone);
 
   /* русло участка (плотина → 3 км) */
@@ -680,9 +681,24 @@ function fmtReleaseBanner(res, n, frontJ, finished){
     (finished ? ' · <b>сценарий завершён (' + fmtClock(res.horizon) + ')</b>' : '');
 }
 
-/* Раскладка по участкам для кадра n: переиспользуется step-ом и финалом */
-function paintReleaseFrame(n){
+/* Раскладка по участкам для кадра n: переиспользуется step-ом и финалом.
+   Покадровая перерисовка здесь и была источником «жутких лагов»: кадры
+   приходят с частотой экрана (60 Гц), а смысл имеет только шаг расчётной
+   сетки (dt=30 с на 30-секундную анимацию = 180 разных состояний). Отсюда —
+   два фильтра: не перерисовывать тот же шаг и не трогать DOM подсказок
+   чаще ~4 Гц (setTooltipContent заставляет Leaflet заново померить и
+   переставить 6 постоянных тултипов — самая дорогая операция кадра). */
+const RELEASE_TIP_MS = 250;
+function paintReleaseFrame(n, force){
   const p = RELEASE, res = S.release.res, R = res.tau.length;
+  const st = S.release;
+  if (!Array.isArray(p.reachMarkers) || p.reachMarkers.length < R) return;
+  const now = performance.now();
+  const sameStep = n === st.lastN && !force;
+  if (sameStep) return;
+  st.lastN = n;
+  const withTips = force || now - (st.lastTips || 0) >= RELEASE_TIP_MS;
+  if (withTips) st.lastTips = now;
   let frontJ = -1;
   for (let j = 0; j < R; j++){
     const extra = res.out[n * R + j];
@@ -690,25 +706,30 @@ function paintReleaseFrame(n){
     const rel = Math.min(1, extra / res.peak);
     const mk = p.reachMarkers[j];
     mk.setStyle({ fillColor: rel > 0.5 ? '#ff3b3b' : rel > 0.2 ? '#ff8a3d' : rel > 0.02 ? '#ffb02e' : '#1a4a6b' });
-    mk.setTooltipContent(`участок ${j+1} · ${fmtNum(p.points[j+1][0],0)} м<br><b>${fmtNum(tot,3)} м³/с</b>` +
-      (extra > 0.001 ? ` <span style="color:#ffb02e">(+${fmtNum(extra,3)})</span>` : ''));
+    if (withTips){
+      mk.setTooltipContent(`участок ${j+1} · ${fmtNum(p.points[j+1][0],0)} м<br><b>${fmtNum(tot,3)} м³/с</b>` +
+        (extra > 0.001 ? ` <span style="color:#ffb02e">(+${fmtNum(extra,3)})</span>` : ''));
+    }
     if (extra > 0.005) frontJ = j;
   }
-  $('alertBanner').innerHTML = fmtReleaseBanner(res, n, frontJ, n >= res.steps);
+  if (withTips) $('alertBanner').innerHTML = fmtReleaseBanner(res, n, frontJ, n >= res.steps);
 }
 
 function releaseFinalFrame(){
   if (!S.release) return;
-  paintReleaseFrame(S.release.res.steps);
+  paintReleaseFrame(S.release.res.steps, true);   // force: финальный кадр обязателен
 }
 
 function releaseStep(tNow){
   if (!S.release) return;
   const res = S.release.res;
-  const tSim = Math.min(res.horizon, (tNow - S.release.start) / 1000 * (res.horizon / (S.release.dur / 1000)));
-  const n = Math.min(res.steps, Math.round(tSim / res.dt));
+  /* горизонт пересчитываем из wall-clock, а не «+1 шаг на кадр»: тогда
+     лаги кадров не уводят сценарий вперёд/назад и последние кадры не теряются */
+  const frac = Math.min(1, (tNow - S.release.start) / S.release.dur);
+  const n = Math.min(res.steps, Math.round(frac * res.steps));
   paintReleaseFrame(n);
   if (n < res.steps) requestAnimationFrame(releaseStep);
+  else if (S.release) releaseFinalFrame();
 }
 
 function stopRelease(){
@@ -1694,7 +1715,7 @@ async function startDamBreak(){
       }, REDUCED_MOTION ? 0 : 2600);
     }
 
-    let fi = 0;
+    let fi = 0, lastRender = 0;
     function step(tNow){
       if (!S.damBreak) return;
       const elapsed = (tNow - S.damBreak.start) / 1000;
@@ -1702,7 +1723,10 @@ async function startDamBreak(){
       S.damBreak.progress = Math.min(1, sim.simT ? tSim / sim.simT : 1);
       while (fi < sim.frames.length - 1 && sim.frames[fi+1].t <= tSim) fi++;
       drawFrame(sim.frames[fi]);
-      render();
+      /* волна (setLatLngs одного полигона) — каждый кадр, а render() — только
+         10 раз в секунду: он заново красит маркеры всех шести станций, и на
+         60 Гц это главный источник тормозов анимации. Финальный кадр — всегда. */
+      if (tSim >= sim.simT || tNow - lastRender > 100){ render(); lastRender = tNow; }
       if (tSim < sim.simT) requestAnimationFrame(step);
       else finishBreak();
     }
@@ -2020,7 +2044,8 @@ function buildUI(){
   function chartOptions(kind){
     const power = kind === 'power';
     return {
-      type:'line', maintainAspectRatio:false, animation:false,
+      /* ВАЖНО: type — свойство КОНФИГА, а не options (см. chartConfig ниже) */
+      maintainAspectRatio:false, animation:false,
       interaction:{ mode:'index', intersect:false },
       elements:{ point:{ radius:0 } },
       plugins:{
@@ -2043,10 +2068,19 @@ function buildUI(){
       }
     };
   }
-  const cpCtx = $('chartPowerC').getContext('2d');
-  S.chartPower = new Chart(cpCtx, { data:{ labels:[], datasets:[] }, options: chartOptions('power') });
-  const clCtx = $('chartLevelC').getContext('2d');
-  S.chartLevel = new Chart(clCtx, { data:{ labels:[], datasets:[] }, options: chartOptions('level') });
+  /* type обязан лежать в КОРНЕ конфига: Chart.js читает config.type и по нему
+     ищет контроллер ('line'). Внутри options он игнорируется, а на пустом
+     datasets ошибка всплывает лишь при первом chart.update() — то есть
+     молча ломает карту, графики и перемотку. Поэтому — отдельный конфиг. */
+  const chartConfig = kind => ({
+    type:'line',
+    data:{ labels:[], datasets:[] },
+    options: chartOptions(kind)
+  });
+  /* canvas, а не getContext('2d'): Chart.js разворачивает и так и так, но
+     элемент не зависит от того, вернёт ли jsdom/тест-стаб корректный .canvas */
+  S.chartPower = new Chart($('chartPowerC'), chartConfig('power'));
+  S.chartLevel = new Chart($('chartLevelC'), chartConfig('level'));
 
   /* Режимы: тот же «один объект на всех» был в обработчиках — плюс aria
      для переключателя (роль tablist без aria-selected скринридером
