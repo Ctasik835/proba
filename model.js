@@ -391,7 +391,7 @@
   /* Кольцо, масштабированное вокруг центра ограничивающего прямоугольника.
      На коридоре в ~2 км равноугольная аппроксимация даёт погрешность в доли
      процента — этим здесь осознанно пренебрегаем. */
-  function scaleRing(ring, s){
+  function scaleRing(ring, s, anchor){
     if (!Array.isArray(ring) || ring.length < 3 || !(s > 0) || Math.abs(s - 1) < 1e-4) return ring;
     let la0 = Infinity, la1 = -Infinity, lo0 = Infinity, lo1 = -Infinity;
     for (const p of ring){
@@ -401,10 +401,143 @@
       if (p[1] < lo0) lo0 = p[1];
       if (p[1] > lo1) lo1 = p[1];
     }
+    /* якорь есть — масштабируем вокруг него (вода держится за плотину);
+       нет — вокруг центра ограничивающего прямоугольника */
+    if (anchor && isFinite(anchor[0]) && isFinite(anchor[1])){
+      const aA = Number(anchor[0]), aO = Number(anchor[1]);
+      return ring.map(p => (p && isFinite(p[0]) && isFinite(p[1]))
+        ? [aA + (p[0] - aA) * s, aO + (p[1] - aO) * s] : p);
+    }
     if (!(la1 > la0) || !(lo1 > lo0)) return ring;
     const cla = (la0 + la1) / 2, clo = (lo0 + lo1) / 2;
     return ring.map(p => (p && isFinite(p[0]) && isFinite(p[1]))
       ? [cla + (p[0] - cla) * s, clo + (p[1] - clo) * s] : p);
+  }
+
+  /* ── БЕРЕГ: ЯКОРЬ У ПЛОТИНЫ И «НЕ ВЫЛЕЗАЕМ ЗА ЧАШУ» ────────────────
+     Раньше кольцо просто масштабировалось вокруг центра ограничивающего
+     прямоугольника, и на серповидном заливе Перовской это давало две
+     артефактные картинки:
+       · вода ОТРЫВАЛАСЬ от плотины — при сработке ближайшая к створу точка
+         уходила на ~60 м вниз поперёк, пруд «висел» в воздухе;
+       · берег ВЫЛЕЗАЛ наружу: из 67 вершин 40 оказывались вне реального
+         контура (сжатый серп выпячивается на вогнутой стороне) — это и есть
+         то, что глазами читается как «водохранилище съехало».
+     Поэтому: масштаб берём вокруг вершины, ближайшей к ПЛОТИНЕ (вода
+     держится за створ, отступает вверх по руслу — как при настоящем
+     падении уровня), а при сработке каждую точку, оказавшуюся вне чаши,
+     притягиваем к ближайшему берегу: вода не может появиться там, где её не
+     было при НПВ. Середины рёбер проверяются тоже — иначе длинный отрезок
+     может пересечь берег наискось.
+     Метрики — в локальной равноугольной проекции (x = lon·cos(sh), y = lat);
+     для коридора в ~2 км погрешность доли процента, а без неё долгота на
+     60°параллели врала бы почти вдвое. */
+
+  /* Список колец: принимает и одно кольцо, и список колец. */
+  function ringList(rings){
+    if (!Array.isArray(rings) || !rings.length) return [];
+    return Array.isArray(rings[0][0]) ? rings : [rings];
+  }
+  function cleanRing(ring){
+    return (ring || []).filter(p => p && isFinite(p[0]) && isFinite(p[1]));
+  }
+  /* Проекционный кадр по всем кольцам водоёма — чтобы все части сидели в одной. */
+  function planarFrame(rings){
+    const pts = [];
+    for (const r of ringList(rings)) pts.push.apply(pts, cleanRing(r));
+    let sum = 0;
+    for (const p of pts) sum += p[0];
+    const lat0 = pts.length ? sum / pts.length : 0;
+    const k = Math.cos(lat0 * Math.PI / 180) || 1;
+    return {
+      k,
+      to: p => [p[1] * k, p[0]],
+      from: xy => [xy[1], xy[0] / k]
+    };
+  }
+  function distPlanar(a, b){ const dx = a[0] - b[0], dy = a[1] - b[1]; return Math.hypot(dx, dy); }
+
+  /* Точка внутри кольца — приём «нечётного пересечения». Аффинно инвариантен,
+     поэтому его можно гонять и в градусах, и в проекции. */
+  function pointInRing(ring, p){
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+      const yi = ring[i][1], yj = ring[j][1], xi = ring[i][0], xj = ring[j][0];
+      if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function shoelaceXY(ring){
+    let a = 0;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+      a += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
+    }
+    return Math.abs(a) / 2;
+  }
+  /* Ближайшая точка на границе кольца (сегменты замкнуты). */
+  function nearestOnRingXY(xy, ring){
+    let best = null, bd = Infinity;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+      const ax = ring[j][0], ay = ring[j][1], bx = ring[i][0], by = ring[i][1];
+      const vx = bx - ax, vy = by - ay, len = vx * vx + vy * vy;
+      let t = len > 0 ? ((xy[0] - ax) * vx + (xy[1] - ay) * vy) / len : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = ax + vx * t, py = ay + vy * t;
+      const d = (px - xy[0]) * (px - xy[0]) + (py - xy[1]) * (py - xy[1]);
+      if (d < bd){ bd = d; best = [px, py]; }
+    }
+    return best || xy;
+  }
+
+  /* Кольцо, притянутое к чаше: что снаружи — то на ближайшем берегу. */
+  function pullInsideRing(ring, outer){
+    const src = cleanRing(ring), bowl = cleanRing(outer);
+    if (!src.length || bowl.length < 3) return ring;
+    const fr = planarFrame([bowl, src]);
+    const bowlXY = bowl.map(fr.to);
+    const out = [];
+    for (let i = 0; i < src.length; i++){
+      const xy = fr.to(src[i]);
+      out.push(pointInRing(bowlXY, xy) ? src[i] : fr.from(nearestOnRingXY(xy, bowlXY)));
+      /* середина следующего ребра — иначе отрезок «берег → внутренняя точка»
+         может пересечь чашу наискось и показать воду там, где суша */
+      const nx = src[(i + 1) % src.length];
+      const mid = [(xy[0] + fr.to(nx)[0]) / 2, (xy[1] + fr.to(nx)[1]) / 2];
+      if (!pointInRing(bowlXY, mid)) out.push(fr.from(nearestOnRingXY(mid, bowlXY)));
+    }
+    return out;
+  }
+
+  /* Береговая линия сценария: масштаб вокруг плотины + посадка в чашу.
+     Возвращает КОЛЬЦА для L.polygon и фактическую долю площади — карточка
+     подписывает ровно то, что нарисовано, а не s² «на бумаге». */
+  function shorelineRings(rings, s, dam){
+    const list = ringList(rings);
+    if (!list.length) return { rings: [], areaRatio: 1 };
+    const scale = Number(s);
+    const ok = Number.isFinite(scale) && scale > 0 && Math.abs(scale - 1) > 1e-4;
+    const fr = planarFrame(list);
+    const damXY = (dam && isFinite(dam[0]) && isFinite(dam[1])) ? fr.to(dam) : null;
+    let a0 = 0, a1 = 0;
+    const out = list.map(ring => {
+      const clean = cleanRing(ring);
+      a0 += shoelaceXY(clean.map(fr.to));
+      if (!ok || !clean.length) { a1 += shoelaceXY(clean.map(fr.to)); return ring; }
+      /* якорь — СВОЯ вершина, ближайшая к створу: тогда вода не отрывается
+         от плотины, а только отступает вверх по руслу */
+      let anch = null, bd = Infinity;
+      if (damXY){
+        for (const p of clean){
+          const d = distPlanar(fr.to(p), damXY);
+          if (d < bd){ bd = d; anch = p; }
+        }
+      }
+      let q = scaleRing(ring, scale, anch || undefined);
+      if (scale < 1) q = pullInsideRing(q, clean);
+      a1 += shoelaceXY(cleanRing(q).map(fr.to));
+      return q;
+    });
+    return { rings: out, areaRatio: a0 > 0 ? a1 / a0 : 1 };
   }
 
   /* Ряды зеркала по всему ряду дат. Возвращается КОПИЯ: исходный расчёт
@@ -445,6 +578,7 @@
     simulate, damBreakView, movingAverage,
     reservoirScenario, scaleRing, applyReservoirScenario, SHORE_CLAMP,
     scenarioAnnualFactor, WATER_YEAR_WEIGHT,
+    shorelineRings, pullInsideRing, pointInRing, shoelaceXY, planarFrame,
     validateRelease, releaseCalculate
   };
 

@@ -82,10 +82,18 @@ test('всё деструктурированное из GES действите�
   for (const n of names){
     assert.ok(n in GES || n === 'window', `model.js не экспортирует ${n}`);
   }
-  /* лишние импорты тоже вредны: мёртвая ссылка кричит только в рантайме */
+  /* лишние импорты тоже вредны: мёртвая ссылка кричит только в рантайме.
+     Экспорт имеет смысл, если его читает либо страница, либо тесты — всё, что
+     не нужно ни там ни там, из GES убираем (иначе «публичный API» обрастает
+     мусором, и правки в model.js перестают что-либо ломать). */
   const exported = Object.keys(GES);
-  const unused = exported.filter(k => !new RegExp(`[\\s{,(]${k}[\\s,:}]`).test(app));
-  assert.ok(unused.length < 12, 'model.js отдаёт слишком много неиспользуемого: ' + unused.join(', '));
+  const tests = ['tests/model.test.mjs', 'tests/site.test.mjs', 'tools/smoke.mjs']
+    .map(read).join('\n');
+  const unused = exported.filter(k => {
+    const re = new RegExp(`\\b${k}\\b`);      // «упомянуто» = живёт в коде, а не в мёртвом API
+    return !re.test(app) && !re.test(tests);
+  });
+  assert.ok(unused.length < 12, 'model.js отдаёт неиспользуемое (ни страницей, ни тестами): ' + unused.join(', '));
 });
 
 test('app.js не объявляет того, что уже есть в model.js', () => {
@@ -388,10 +396,19 @@ test('водохранилище Перовской меняет берег в �
 
   const i = app.indexOf('function drawReservoir');
   const j = app.indexOf("/* 2) Контур, полученный из Overpass", i);
+  const model = read('model.js');
   const body = app.slice(i, j);
   assert.ok(i > 0 && j > i, 'drawReservoir не найден');
   assert.match(body, /g\.n \|\| g\.d \|\| g\.f/, 'контур НПВ (n) должен быть приоритетным');
-  assert.match(body, /scaleRing\(ring, sc\)/, 'берег не масштабируется по зеркалу');
+  assert.match(body, /shorelineRings\(base, sc, \[h\.lat, h\.lon\]\)/,
+    'берег не масштабируется по зеркалу');
+  assert.match(body, /shore\.rings\.forEach/, 'рисовать надо то, что вернула схема берега, а не исходное кольцо');
+  /* якорь — у плотины, иначе «водохранилище съезжает»: вода отрывается от створа,
+     а серповидный берег вылезаёт за чашу */
+  assert.match(model, /function shorelineRings\(rings, s, dam\)/, 'нет схемы берега с якорем у плотины');
+  assert.match(model, /function pullInsideRing\(ring, outer\)/, 'нет посадки воды в чашу при сработке');
+  assert.match(model, /вершина, ближайшая к ПЛОТИНЕ|ближайшей к ПЛОТИНЕ/,
+    'в model.js не объяснено, почему якорь именно у створа');
   assert.match(body, /r\.shoreScale/, 'масштаб берега берётся не из ряда applyReservoirScenario');
   assert.match(body, /dash:\s*true/, 'нет пунктирной границы НПВ при отступлении воды');
   assert.ok(!/\[g\.d, g\.n, g\.f\]\[vi\]/.test(body),
@@ -400,6 +417,8 @@ test('водохранилище Перовской меняет берег в �
 
   /* подписи в карточке: без них «уползший» берег выглядит багом */
   assert.match(app, /Площадь берегового контура/, 'в карточке нет строки про площадь контура');
+  assert.match(app, /shoreDrawn[\s\S]{0,400}% снимка при НПВ/,
+    'процент должен считаться по рисуемой фигуре, а не как s² «на бумаге»');
   assert.ok(!/Площадь зеркала/.test(app),
     'площадь зеркала из модели в карточке не нужна — она противоречит рисуемому контуру');
   assert.match(app, /Поправка «/, 'в карточке нет строки про поправку сценария');
@@ -409,5 +428,5 @@ test('водохранилище Перовской меняет берег в �
   /* математика живёт в model.js (и там ей тесты), в UI — только применение */
   assert.match(read('model.js'), /function reservoirScenario\(h, factor\)/);
   assert.match(read('model.js'), /function applyReservoirScenario\(res, h, times, scen\)/);
-  assert.match(read('model.js'), /function scaleRing\(ring, s\)/);
+  assert.match(read('model.js'), /function scaleRing\(ring, s, anchor\)/);
 });
