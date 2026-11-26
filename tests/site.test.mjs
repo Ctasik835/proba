@@ -400,16 +400,25 @@ test('водохранилище Перовской меняет берег в �
   const body = app.slice(i, j);
   assert.ok(i > 0 && j > i, 'drawReservoir не найден');
   assert.match(body, /g\.n \|\| g\.d \|\| g\.f/, 'контур НПВ (n) должен быть приоритетным');
-  assert.match(body, /shorelineRings\(base, sc, \[h\.lat, h\.lon\]\)/,
-    'берег не масштабируется по зеркалу');
+  assert.match(body, /shorelineRings\(base, wd\)/, 'берег не пересчитывается по зеркалу');
   assert.match(body, /shore\.rings\.forEach/, 'рисовать надо то, что вернула схема берега, а не исходное кольцо');
-  /* якорь — у плотины, иначе «водохранилище съезжает»: вода отрывается от створа,
-     а серповидный берег вылезаёт за чашу */
-  assert.match(model, /function shorelineRings\(rings, s, dam\)/, 'нет схемы берега с якорем у плотины');
-  assert.match(model, /function pullInsideRing\(ring, outer\)/, 'нет посадки воды в чашу при сработке');
-  assert.match(model, /вершина, ближайшая к ПЛОТИНЕ|ближайшей к ПЛОТИНЕ/,
-    'в model.js не объяснено, почему якорь именно у створа');
-  assert.match(body, /r\.shoreScale/, 'масштаб берега берётся не из ряда applyReservoirScenario');
+  assert.match(body, /Math\.abs\(wd - 1\) > 0\.03/, 'пунктир границы НПВ не привязан к поправке');
+  assert.match(model, /function shorelineRings\(rings, w\)/, 'нет схемы берега');
+  assert.match(model, /function narrowRing\(ring, w\)/, 'нет сжатия полосы поперёк русла');
+  assert.match(model, /function shoreRays\(ring\)/, 'нет локальных створов (нормаль + расстояние до противоположного берега)');
+  assert.match(model, /SHORE_CAP \* medianOf|SHORE_CAP/,
+    'нет ограничения «вдоль русла не едем» — без него берег снова съезжает с плотины');
+  assert.match(model, /SHORE_EDGE/,
+    'нет ограничения смещения длиной ребра — без него на sharp-углах вырастают петли');
+  assert.ok(!/function scaleRing\(/.test(model),
+    'масштабирование кольца вокруг точки удалён из model.js — на серповидном озере оно давало съезд');
+  assert.ok(!/pullInsideRing/.test(model),
+    'притягивание наружных вершин к берегу удалено: оно рожало шипы вместо зеркала');
+  /* поля ряда переименованы по смыслу: это поперечный множитель, а не «масштаб» */
+  assert.match(model, /shoreWidth: \[\]/, 'applyReservoirScenario не заводит ряд shoreWidth');
+  assert.ok(!/shoreScale/.test(model) && !/shoreScale/.test(app),
+    'старое имя shoreScale осталось в коде');
+  assert.match(body, /r\.shoreWidth/, 'ширина берега берётся не из ряда applyReservoirScenario');
   assert.match(body, /dash:\s*true/, 'нет пунктирной границы НПВ при отступлении воды');
   assert.ok(!/\[g\.d, g\.n, g\.f\]\[vi\]/.test(body),
     'выбор колец по вариантам n/d/f должен быть удалён: d/f — копии n, картинка не менялась');
@@ -428,5 +437,5 @@ test('водохранилище Перовской меняет берег в �
   /* математика живёт в model.js (и там ей тесты), в UI — только применение */
   assert.match(read('model.js'), /function reservoirScenario\(h, factor\)/);
   assert.match(read('model.js'), /function applyReservoirScenario\(res, h, times, scen\)/);
-  assert.match(read('model.js'), /function scaleRing\(ring, s, anchor\)/);
+  assert.match(read('model.js'), /function narrowRing\(ring, w\)/);
 });
