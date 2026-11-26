@@ -379,3 +379,35 @@ test('поповер учебного сброса ставится ПОД ма�
   assert.match(css, /\.leaflet-popup\.pop-under \.leaflet-popup-tip\{[^}]*margin:10px auto 0/,
     'ромбик хвоста не перевёрнут — хвост будет смотреть вниз');
 });
+
+/* ---------- зеркало водохранилища в сценариях ---------- */
+test('водохранилище Перовской меняет берег в «паводке» и «засухе»', () => {
+  /* ряд: поправка применяется к копии результатов, а не на месте */
+  assert.match(app, /S\.results\[h\.id\] = applyReservoirScenario\(r, h, c\.hydro\.time, S\.scenario\)/,
+    'recompute не применяет схему зеркала');
+
+  const i = app.indexOf('function drawReservoir');
+  const j = app.indexOf("/* 2) Контур, полученный из Overpass", i);
+  const body = app.slice(i, j);
+  assert.ok(i > 0 && j > i, 'drawReservoir не найден');
+  assert.match(body, /g\.n \|\| g\.d \|\| g\.f/, 'контур НПВ (n) должен быть приоритетным');
+  assert.match(body, /scaleRing\(ring, sc\)/, 'берег не масштабируется по зеркалу');
+  assert.match(body, /r\.shoreScale/, 'масштаб берега берётся не из ряда applyReservoirScenario');
+  assert.match(body, /dash:\s*true/, 'нет пунктирной границы НПВ при отступлении воды');
+  assert.ok(!/\[g\.d, g\.n, g\.f\]\[vi\]/.test(body),
+    'выбор колец по вариантам n/d/f должен быть удалён: d/f — копии n, картинка не менялась');
+  assert.ok(!/resVar/.test(app), 'гистерезис S.resVar больше не нужен (масштаб непрерывен)');
+
+  /* подписи в карточке: без них «уползший» берег выглядит багом */
+  assert.match(app, /Площадь берегового контура/, 'в карточке нет строки про площадь контура');
+  assert.ok(!/Площадь зеркала/.test(app),
+    'площадь зеркала из модели в карточке не нужна — она противоречит рисуемому контуру');
+  assert.match(app, /Поправка «/, 'в карточке нет строки про поправку сценария');
+  assert.match(app, /зеркало пересчитано по водности года \(схема\)/,
+    'нет пометки, что берег — схема');
+
+  /* математика живёт в model.js (и там ей тесты), в UI — только применение */
+  assert.match(read('model.js'), /function reservoirScenario\(h, factor\)/);
+  assert.match(read('model.js'), /function applyReservoirScenario\(res, h, times, scen\)/);
+  assert.match(read('model.js'), /function scaleRing\(ring, s\)/);
+});

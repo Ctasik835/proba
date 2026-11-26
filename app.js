@@ -10,6 +10,7 @@ window.addEventListener('error', e => console.error('Ошибка страниц
 const {
   simulate, syntheticData: gesSynthetic, releaseCalculate, movingAverage,
   scenarioFactor, damBreakView, alignIndex, buildTimeIndex,
+  applyReservoirScenario, scaleRing,
   dayOfYear, daysInMonth, utcToISO, todayISO,
   num: fmtNum, fmtMW, fmtAxisPower, fmtEnergyKWh, fmtDateRu, isoToUTC
 } = window.GES;
@@ -1097,7 +1098,16 @@ function recompute(){
       q = q.map((v, k) => (v || 0) * scenarioFactor(h, times[k], S.scenario));
     }
 
-    setStationSeries(h, null, { hydro: { time: c.hydro.time, q }, clim: c.clim }, null);
+    const r = setStationSeries(h, null, { hydro: { time: c.hydro.time, q }, clim: c.clim }, null);
+
+    /* Зеркало воды: в «паводке»/«засухе» отметка и площадь пересчитываются
+       схемой свободным водосбросом (model.js:applyReservoirScenario). Без неё
+       пруд не менялся бы вовсе: правило эксплуатации в simulate держит уровень
+       на целевой отметке, а излишек паводка уходит в холостой сброс.
+       applyReservoirScenario возвращает КОПИЮ — исходный ряд не правится. */
+    if (S.scenario === 'flood' || S.scenario === 'drought'){
+      S.results[h.id] = applyReservoirScenario(r, h, c.hydro.time, S.scenario);
+    }
 
     if (S.scenario === 'dam_break' && S.selected === h.id){
       /* копия, а не правка на месте — иначе обнулённые ряды оставались
@@ -1840,35 +1850,32 @@ function drawReservoir(h, i, lf, overtop){
   else if (lf > 0.75){ color='#16b5ff'; fill='#2fc4ff'; op=0.35; }
   else { color='#16b5ff'; fill='#2fc4ff'; op=0.26; }
 
-  /* Сценарная подсветка: паводок — красный, засуха — жёлтый (контур
-     при этом всё равно морфится по вариантам n/d/f чуть ниже). */
+  /* Сценарная подсветка: паводок — красный, засуха — жёлтый. */
   if (S.scenario === 'flood'){ color='#ff2222'; fill='#ff4545'; op=0.45; }
   else if (S.scenario === 'drought'){ color='#ffb300'; fill='#ffd54a'; op=0.4; }
 
-  /* 1) Встроенные реальные контуры (reservoirs-data.js, снимок OSM) — приоритет */
+  /* 1) Встроенные реальные контуры (reservoirs-data.js, снимок OSM) — приоритет.
+     Реальный контур в данных один — снимок при НПВ; «засуха» и «паводок»
+     (g.d / g.f) оказались его побайтовыми копиями, поэтому прежнее переключение
+     колец n/d/f визуально не меняло ничего. Береговая линия считается из
+     моделируемой площади зеркала: кольцо масштабируется вокруг центра bbox,
+     s = √(A/A_НПУ) — см. model.js:reservoirScenario и scaleRing. */
   const g = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
   if (g){
-    /* Выбор контура: n — норма, d — засуха (вода отступила), f — паводок (разлив).
-       По моделируемой площади зеркала k=A/А_НПУ с гистерезисом против мерцания;
-       сценарии паводок/засуха форсируют соответствующий контур. */
-    if (!S.resVar) S.resVar = {};
-    const k = r.area[i] / h.areaNMU;
-    let vi = S.resVar[h.id] ?? 1;
-    if (S.scenario === 'drought') vi = (k > 1.05) ? 2 : 0;
-    else if (S.scenario === 'flood') vi = (k < 0.5) ? 0 : 2;
-    else {
-      if (k < 0.55) vi = 0;
-      else if (k > 0.62 && k < 1.05) vi = 1;
-      else if (k > 1.08) vi = 2;
-    }
-    S.resVar[h.id] = vi;
-    const gn = Array.isArray(g) ? g : (g.n || []);
-    const rings = Array.isArray(g) ? g : ([g.d, g.n, g.f][vi] || gn);
+    const base = Array.isArray(g) ? g : (g.n || g.d || g.f || []);
+    const sc = (r.shoreScale && r.shoreScale[i] != null && isFinite(r.shoreScale[i])) ? r.shoreScale[i] : 1;
     const group = L.layerGroup();
-    /* Контуры по OSM рисуются как есть (без сглаживания), polyAdd сам замыкает кольцо */
-    rings.forEach(ring => {
-      polyAdd(group, ring, { color: color, weight:2, opacity:0.95, fill: fill, fillOpacity: op });
+    base.forEach(ring => {
+      polyAdd(group, scaleRing(ring, sc), { color, weight:2, opacity:0.95, fill, fillOpacity: op });
     });
+    /* граница НПВ — серым пунктиром, когда вода ушла или разлилась за неё:
+       без неё «сдувшийся» пруд читается как ошибка данных, а не как засуха */
+    if (Math.abs(sc - 1) > 0.03){
+      base.forEach(ring => {
+        polyAdd(group, ring, { color:'#8ba0b6', weight:1, opacity:0.8, dash:true,
+                               fill:'#000000', fillOpacity:0 });
+      });
+    }
     group.addTo(layerRes);
     S.reservoirs[h.id] = group;
     return;
@@ -2328,8 +2335,29 @@ function detailsHTML(h){
     : (S.loadingRiver[h.id] ? 'русло загружается…' : 'русло не загружено');
   const gg = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
   const resEmbedded = !!(gg && (Array.isArray(gg) ? gg.length : (gg.n && gg.n.length)));
+  /* Про зеркало воды: площадь — из модели, поправка сценария — отдельной
+     строкой. Без неё пользователь видит только расход и не понимает, почему
+     берег уполз; с ней видно, что это схема, а не расчёт подпорной кривой. */
+  const dhNow = (r.shoreDh && isFinite(r.shoreDh[i])) ? r.shoreDh[i] : null;
+  const scNow = (r.shoreScale && isFinite(r.shoreScale[i])) ? r.shoreScale[i] : null;
+  /* Строка про площадь — про РИСУЕМЫЙ контур (снимок OSM при НПВ, помноженный
+     на поправку), а не про модельную площадь: модель даёт для пруда 0,001 км²
+     (своя кривая площадь), и ряды «вот контур на весь залив» + «вот 0,001 км²»
+     читались бы как противоречие. Модельное зеркало осталось в попапе — «Зеркало». */
+  const ratio = scNow != null ? scNow * scNow : 1;
+  const areaShow = h.areaNMU ? h.areaNMU * ratio : null;
+  const waterRows = `<div class="kv"><span>Площадь берегового контура</span><span>${
+      areaShow != null ? fmtNum(areaShow, 3) + ' км² · ' +
+        (Math.abs(ratio - 1) > 0.01 ? '×' + fmtNum(ratio, 2) + ' к снимку при НПВ' : 'снимок при НПВ') : '—'
+    }</span></div>` + (
+      dhNow != null && Math.abs(dhNow) > 1e-3
+        ? `<div class="kv"><span>Поправка «${S.scenario === 'flood' ? 'многоводный год' : 'маловодный год'}»</span><span style="color:${dhNow > 0 ? '#ff8a3d' : '#ffd54a'}">${
+            (dhNow > 0 ? '+' : '') + fmtNum(dhNow, 2) + ' м к отметке · берег ×' + fmtNum(scNow ?? 1, 2)
+          }</span></div>`
+        : ''
+    );
   const resInfo = resEmbedded
-    ? `водохранилище: реальный контур OSM (встроен)`
+    ? `водохранилище: реальный контур OSM (встроен)${dhNow != null ? ' · зеркало пересчитано по водности года (схема)' : ''}`
     : S.reservoirsOSM[h.id]
       ? (S.reservoirsOSM[h.id].length ? `водохранилище: ${S.reservoirsOSM[h.id].length} объектов OSM` : 'водохранилище: фолбэк')
       : (S.loadingRes[h.id] ? 'водохранилище загружается…' : 'водохранилище: фолбэк');
@@ -2359,6 +2387,7 @@ function detailsHTML(h){
   <div class="kv"><span>НПУ / УМО</span><span>${fmtNum(h.nmu,1)} / ${fmtNum(h.umo,1)} м</span></div>
   <div class="kv"><span>Дата ряда</span><span>${fmtDateRu(S.dates[S.idx])}</span></div>
   <div class="kv ${overtop?'danger':''}"><span>Текущий уровень</span><span>${fmtNum(r.level[i],2)} м</span></div>
+  ${waterRows}
   <div class="kv ${overtop?'danger':''}"><span>Текущая мощность</span><span>${h.notHPP ? '—' : fmtMW(r.power[i])}</span></div>
   <div class="kv"><span>Выработка за период</span><span>${fmtEnergyKWh(r.kwh)}</span></div>
   <div style="margin-top:8px;padding:8px 10px;background:rgba(255,59,59,.08);border:1px solid rgba(255,59,59,.25);border-radius:8px;font-size:11px;line-height:1.5">
