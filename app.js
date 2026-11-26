@@ -10,7 +10,7 @@ window.addEventListener('error', e => console.error('Ошибка страниц
 const {
   simulate, syntheticData: gesSynthetic, releaseCalculate, movingAverage,
   scenarioFactor, damBreakView, alignIndex, buildTimeIndex,
-  applyReservoirScenario, scaleRing,
+  applyReservoirScenario, shorelineRings,
   dayOfYear, daysInMonth, utcToISO, todayISO,
   num: fmtNum, fmtMW, fmtAxisPower, fmtEnergyKWh, fmtDateRu, isoToUTC
 } = window.GES;
@@ -1859,14 +1859,18 @@ function drawReservoir(h, i, lf, overtop){
      (g.d / g.f) оказались его побайтовыми копиями, поэтому прежнее переключение
      колец n/d/f визуально не меняло ничего. Береговая линия считается из
      моделируемой площади зеркала: кольцо масштабируется вокруг центра bbox,
-     s = √(A/A_НПУ) — см. model.js:reservoirScenario и scaleRing. */
+     s = √(A/A_НПУ) — см. model.js:reservoirScenario и shorelineRings. */
   const g = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
   if (g){
     const base = Array.isArray(g) ? g : (g.n || g.d || g.f || []);
     const sc = (r.shoreScale && r.shoreScale[i] != null && isFinite(r.shoreScale[i])) ? r.shoreScale[i] : 1;
+    /* Масштаб вокруг ВЕРШИНЫ У ПЛОТИНЫ и посадка в чашу (model.js:shorelineRings):
+       при якорении по центру bbox серповидный залив «съезжал» — вода отрывалась
+       от створа на ~60 м, и берег вылезал наружу. */
+    const shore = shorelineRings(base, sc, [h.lat, h.lon]);
     const group = L.layerGroup();
-    base.forEach(ring => {
-      polyAdd(group, scaleRing(ring, sc), { color, weight:2, opacity:0.95, fill, fillOpacity: op });
+    shore.rings.forEach(ring => {
+      polyAdd(group, ring, { color, weight:2, opacity:0.95, fill, fillOpacity: op });
     });
     /* граница НПВ — серым пунктиром, когда вода ушла или разлилась за неё:
        без неё «сдувшийся» пруд читается как ошибка данных, а не как засуха */
@@ -2344,11 +2348,16 @@ function detailsHTML(h){
      на поправку), а не про модельную площадь: модель даёт для пруда 0,001 км²
      (своя кривая площадь), и ряды «вот контур на весь залив» + «вот 0,001 км²»
      читались бы как противоречие. Модельное зеркало осталось в попапе — «Зеркало». */
-  const ratio = scNow != null ? scNow * scNow : 1;
+  /* Долю площади считаем по РИСУЕМЫМ кольцу, а не как s²: при сработке берег
+     ещё и притянут к чаше, поэтому фактическая площадь меньше «бумажной». */
+  const shoreDrawn = resEmbedded
+    ? shorelineRings(Array.isArray(gg) ? gg : (gg.n || gg.d || gg.f || []), scNow ?? 1, [h.lat, h.lon])
+    : null;
+  const ratio = shoreDrawn ? shoreDrawn.areaRatio : 1;
   const areaShow = h.areaNMU ? h.areaNMU * ratio : null;
   const waterRows = `<div class="kv"><span>Площадь берегового контура</span><span>${
       areaShow != null ? fmtNum(areaShow, 3) + ' км² · ' +
-        (Math.abs(ratio - 1) > 0.01 ? '×' + fmtNum(ratio, 2) + ' к снимку при НПВ' : 'снимок при НПВ') : '—'
+        (Math.abs(ratio - 1) > 0.01 ? fmtNum(ratio * 100, 0) + '% снимка при НПВ' : 'снимок при НПВ') : '—'
     }</span></div>` + (
       dhNow != null && Math.abs(dhNow) > 1e-3
         ? `<div class="kv"><span>Поправка «${S.scenario === 'flood' ? 'многоводный год' : 'маловодный год'}»</span><span style="color:${dhNow > 0 ? '#ff8a3d' : '#ffd54a'}">${

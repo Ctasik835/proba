@@ -305,3 +305,122 @@ test('scaleRing: масштаб вокруг центра bbox и устойчи
   assert.deepEqual(GES.scaleRing(degenerate, 3), degenerate, 'нулевой bbox — кольцо не трогаем');
 });
 
+/* ---------- посадка берега в чашу: «не съезжает» ---------- */
+test('scaleRing с якорем: точка якоря стоит, всё остальное расходится от неё', () => {
+  const ring = [[0, 0], [0, 2], [2, 2], [2, 0]];
+  const out = GES.scaleRing(ring, 0.5, [0, 0]);
+  assert.deepEqual(out[0], [0, 0], 'якорная вершина не двигается вовсе');
+  assert.deepEqual(out, [[0, 0], [0, 1], [1, 1], [1, 0]]);
+  /* якорь вне кольца тоже допустим (плотина может стоять у самой кромки) */
+  const far = GES.scaleRing(ring, 2, [-1, -1]);
+  assert.deepEqual(far[0], [1, 1], 'удаление от якоря удваивается');
+  assert.deepEqual(GES.scaleRing(ring, 2, [NaN, 3]), GES.scaleRing(ring, 2),
+    'сломанный якорь — откат к центру bbox, без NaN');
+});
+
+test('pointInRing / pullInsideRing: наружные точки садятся на берег', () => {
+  const square = [[0, 0], [0, 10], [10, 10], [10, 0]];
+  assert.ok(GES.pointInRing(square, [5, 5]), 'центр внутри');
+  assert.ok(!GES.pointInRing(square, [11, 5]), 'точка снаружи — снаружи и считается');
+  const outside = [[-2, 5], [5, 5], [12, 5], [5, -1]];
+  const fixed = GES.pullInsideRing(outside, square);
+  assert.ok(fixed.length >= outside.length, 'проверяются и середины рёбер — точек может добавиться');
+  for (const p of fixed){
+    assert.ok(Number.isFinite(p[0]) && Number.isFinite(p[1]), 'после правки NaN быть не может');
+    assert.ok(GES.pointInRing(square, p) ||
+      Math.min(Math.abs(p[0]), Math.abs(p[0] - 10), Math.abs(p[1]), Math.abs(p[1] - 10)) < 1e-9,
+      `вершина ${p} осталась вне чаши`);
+  }
+  /* наружные садятся на ближайший берег, внутренние остаются как были */
+  const has = (x, y) => fixed.some(q => Math.abs(q[0] - x) < 1e-9 && Math.abs(q[1] - y) < 1e-9);
+  assert.ok(has(0, 5), 'точка (-2,5) должна сесть на берег в (0,5)');
+  assert.ok(has(10, 5), 'точка (12,5) должна сесть на берег в (10,5)');
+  assert.ok(has(5, 5), 'внутренняя точка (5,5) не двигается');
+  assert.ok(has(5, 0), 'точка (5,-1) должна сесть на берег в (5,0)');
+  assert.deepEqual(GES.pullInsideRing([], square), [], 'пустое кольцо — пустой ответ');
+  assert.deepEqual(GES.pullInsideRing([[0, 0], [1, 1]], square), [[0, 0], [1, 1]],
+    'короткое кольцо не чиним — polyAdd его всё равно выкинет');
+});
+
+/* Реальная геометрия Перовской: серповидный залив, и ровно на нём прежняя
+   схема «масштаб вокруг центра bbox» давала видимый съезд. */
+const RES_GEO = (() => {
+  const src = fs.readFileSync(path.join(ROOT, 'reservoirs-data.js'), 'utf8');
+  const w = {}; new Function('window', src)(w);
+  return w.RESERVOIR_GEOMETRY.pero;
+})();
+const DAM = [60.67992, 28.95119];          // створ плотины (координаты маркера в HPPS)
+const M_PER_DEG = 111320;
+const mBetween = (a, b) => Math.hypot((a[0] - b[0]) * M_PER_DEG,
+                                     (a[1] - b[1]) * M_PER_DEG * Math.cos(60.68 * Math.PI / 180));
+
+test('shorelineRings: засуха не отрывает воду от плотины и не вылезает за чашу', () => {
+  const base = RES_GEO.n;
+  const fr = GES.planarFrame(base);
+  const outer = base[0];
+  const outerXY = outer.map(fr.to);
+
+  for (const [name, s] of [['засуха', 0.736], ['сильная засуха', 0.5], ['паводок', 1.174], ['норма', 1]]){
+    const sh = GES.shorelineRings(base, s, DAM);
+    assert.equal(sh.rings.length, 1, name + ': колец должно остаться столько же');
+    const pts = sh.rings[0].filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+    assert.ok(pts.length >= 3, name + ': кольцо живо');
+    /* 1) вода держится створа: ближайшая к платине вершина не уползает далеко */
+    const near = Math.min(...pts.map(p => mBetween(p, DAM)));
+    const nearBase = Math.min(...outer.map(p => mBetween(p, DAM)));
+    assert.ok(near <= nearBase + 25,
+      name + ': ближайшая к плотине точка отъехала на ' + near.toFixed(0) + ' м (контур — ' + nearBase.toFixed(0) + ' м)');
+    /* 2) при сработке зеркало не может появиться суше, чем было при НПВ */
+    if (s < 1){
+      for (const p of pts){
+        const xy = fr.to(p);
+        if (GES.pointInRing(outerXY, xy)) continue;
+        /* на границе point-in-ring неопределён — проверяем, что точка реально на берегу */
+        let d = Infinity;
+        for (let i = 0, j = outerXY.length - 1; i < outerXY.length; j = i++){
+          const ax = outerXY[j][0], ay = outerXY[j][1];
+          const vx = outerXY[i][0] - ax, vy = outerXY[i][1] - ay;
+          const l = vx * vx + vy * vy;
+          let t = l > 0 ? ((xy[0] - ax) * vx + (xy[1] - ay) * vy) / l : 0;
+          t = Math.max(0, Math.min(1, t));
+          d = Math.min(d, Math.hypot(ax + vx * t - xy[0], ay + vy * t - xy[1]));
+        }
+        assert.ok(d * M_PER_DEG < 2, name + ': вершина вне чаши на ' + (d * M_PER_DEG).toFixed(1) + ' м — «водохранилище съехало»');
+      }
+    }
+    /* 3) площадь — в правильную сторону и без вырождения */
+    if (s < 1) assert.ok(sh.areaRatio > 0.05 && sh.areaRatio < 1, name + ': площадь ' + sh.areaRatio);
+    if (s > 1) assert.ok(sh.areaRatio > 1, name + ': паводок должен заливать');
+    if (s === 1) assert.equal(sh.areaRatio, 1, name + ': норма — контур как есть');
+  }
+});
+
+test('shorelineRings: якорь у плотины важнее центра bbox — на реальном контуре это десятки метров', () => {
+  const base = RES_GEO.n;
+  const damAnchored = GES.shorelineRings(base, 0.736, DAM).rings[0];
+  const s = 0.736;
+  /* прежняя схема: масштаб вокруг центра bbox — считаем так же, но без якоря */
+  const naive = GES.scaleRing(base[0], s);
+  const nearDam = Math.min(...damAnchored.filter(p => isFinite(p[0])).map(p => mBetween(p, DAM)));
+  const nearNaive = Math.min(...naive.filter(p => isFinite(p[0])).map(p => mBetween(p, DAM)));
+  assert.ok(nearNaive > 30, 'наивный центр bbox должен отрывать воду от створа (иначе тест ни о чём)');
+  assert.ok(nearDam < nearNaive - 20,
+    `якорь у плотины должен снимать отрыв: ${nearDam.toFixed(0)} м против ${nearNaive.toFixed(0)} м`);
+});
+
+test('shorelineRings: мусор, пустота и один контур без якоря не валят схему', () => {
+  assert.deepEqual(GES.shorelineRings([], 0.7, DAM), { rings: [], areaRatio: 1 });
+  assert.deepEqual(GES.shorelineRings(null, 0.7, DAM), { rings: [], areaRatio: 1 });
+  for (const bad of [NaN, 0, -1, undefined, 'x']){
+    const sh = GES.shorelineRings(RES_GEO.n, bad, DAM);
+    assert.equal(sh.rings.length, 1);
+    assert.deepEqual(sh.rings[0], RES_GEO.n[0], 'некорректный масштаб — исходное кольцо, без NaN');
+    assert.equal(sh.areaRatio, 1);
+  }
+  const noDam = GES.shorelineRings(RES_GEO.n, 0.7, [NaN, NaN]);
+  assert.ok(noDam.rings[0].every(p => Number.isFinite(p[0]) && Number.isFinite(p[1])),
+    'без плотины — масштаб вокруг центра bbox, но всё равно конечный');
+  /* кольцо «плоское» (нулевая площадь) — площадь не должен дать NaN */
+  const flat = GES.shorelineRings([[[0, 0], [0, 1], [0, 2]]], 0.5, [0, 0]);
+  assert.ok(Number.isFinite(flat.areaRatio), 'areaRatio конечен даже на вырожденном контуре');
+});
