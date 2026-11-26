@@ -367,6 +367,64 @@ for (const sc of ['flood', 'drought']){
 click(q('.scenBtn[data-scen="normal"]'));
 await wait(250);
 
+/* ---------- зум при выборе ГЭС ---------- */
+/* Кадр проверяем по перехвату fitBounds/flyToBounds: в jsdom анимация карты
+   не доигрывает, зато видно, ЧТО именно приложение попросило показать. */
+const fits = [];
+{
+  const proto = window.L.Map.prototype;
+  for (const m of ['fitBounds', 'flyToBounds']){
+    const orig = proto[m];
+    proto[m] = function(bnds, o){
+      const b = window.L.latLngBounds(bnds);
+      fits.push({ via: m, maxZoom: o && o.maxZoom, pad: !!(o && o.paddingTopLeft),
+                  spanLat: b.isValid() ? (b.getNorth() - b.getSouth()) : 0,
+                  spanLng: b.isValid() ? (b.getEast() - b.getWest()) : 0,
+                  sw: b.isValid() ? [b.getSouth(), b.getWest()] : null,
+                  ne: b.isValid() ? [b.getNorth(), b.getEast()] : null });
+      return orig.call(this, bnds, o);
+    };
+  }
+}
+{
+  const n0 = fits.length;
+  click(q('.hppItem[data-id="rokk"]'));
+  await wait(900);
+  const f = fits.slice(n0).pop();
+  check('выбор ГЭС кадрирует на станцию, а не перелетает на точку',
+    !!f && f.maxZoom === 16 && f.pad,
+    f ? (f.via + ' · maxZoom ' + f.maxZoom + ' · padding ' + f.pad) : 'fitBounds не вызван');
+  check('станция без чаши — кадр по максимуму, а не по миру целиком',
+    !!f && f.spanLat < 1e-6 && f.spanLng < 1e-6 && f.maxZoom === 16,
+    f ? ('span ' + f.spanLat.toFixed(6) + '×' + f.spanLng.toFixed(6)) : 'нет кадра');
+  check('кадр станции не валят страницу', errors.length === 0, errors.slice(0, 1).join(''));
+  /* Перовская: в кадр обязан попасть РЕАЛЬНЫЙ контур (0,0039° по широте,
+     0,0076° по долготе) — иначе «зум на ГЭС» показывает не ГЭС */
+  {
+    const n1 = fits.length;
+    click(q('.hppItem[data-id="pero"]'));
+    await wait(1000);   /* русло/данные подгружаются — fitBounds может прийти вторым заходом */
+    const got = fits.slice(n1);
+    /* рамка обязана накрывать ВЕСЬ реальный контур (bbox снимка OSM при НПВ):
+       lat 60.676292…60.680235, lon 28.950914…28.958536 */
+    const covers = (f) => !!f && f.sw && f.ne &&
+      f.sw[0] <= 60.676293 && f.ne[0] >= 60.680234 && f.sw[1] <= 28.950915 && f.ne[1] >= 28.958535;
+    const fp = got.filter(covers).pop() || got[got.length - 1];
+    check('на Перовскую кадрируем чашу целиком (рамка накрывает весь контур)', covers(fp),
+      'кадров: ' + got.length + ' · ' + (fp && fp.sw ? ('lat ' + fp.sw[0].toFixed(5) + '…' + fp.ne[0].toFixed(5) +
+      ' · lon ' + fp.sw[1].toFixed(5) + '…' + fp.ne[1].toFixed(5)) : 'нет'));
+  }
+  check('кадр Перовской не валят страницу', errors.length === 0, errors.slice(0, 1).join(''));
+}
+
+/* подглядываем за созданием поповера: L.popup возвращает объект, у которого
+   потом проверяем offset (именно он отвечает «над маркером окно или под») */
+const popups = [];
+{
+  const orig = window.L.popup;
+  window.L.popup = function(...a){ const p = orig.apply(this, a); popups.push(p); return p; };
+}
+
 /* ---------- прорыв ---------- */
 click(q('.scenBtn[data-scen="dam_break"]'));
 await wait(2500);
@@ -387,18 +445,37 @@ if (REDUCE){
     window.__ops > ops0 && q('#alertBanner').textContent !== t1,
     'ops: ' + ops0 + ' → ' + window.__ops + ' · ' + q('#alertBanner').textContent.slice(0, 32).replace(/\s+/g, ' '));
 }
+{
+  await wait(700);                     /* окно прорыва открывается по таймеру (500 мс) */
+  const pop = popups[popups.length - 1];
+  const el = pop && pop.getElement && pop.getElement();
+  check('прорыв: окно у плотины открыто', !!pop && !!q('#map .leaflet-popup'),
+    'поповеров создано: ' + popups.length);
+  const cls = el ? String(el.className) : '';
+  check('прорыв: у окна перевёрнутый хвост (класс pop-under)', /pop-under/.test(cls), cls || 'нет контейнера');
+  const oy = pop ? pop.options.offset[1] : null;
+  const hh = el ? (el.getBoundingClientRect().height || el.offsetHeight) : 0;
+  check('прорыв: окно ПОД маркером (смещено на собственную высоту, как при сбросе)',
+    hh > 0 && oy >= hh - 1, 'offset.y=' + oy + ' · высота окна=' + Math.round(hh));
+  const cont = pop && pop._container;
+  const bot = cont && cont.style.bottom ? parseFloat(cont.style.bottom) : null;
+  check('прорыв: окно позиционирует Leaflet (bottom отрицательный — окно под точкой)',
+    bot !== null && bot < 0, 'bottom=' + (cont ? cont.style.bottom : 'нет контейнера'));
+}
 check('прорыв: без ошибок', errors.length === 0, errors.slice(0, 1).join(''));
 click(q('.scenBtn[data-scen="reset"]'));
 await wait(400);
+{
+  /* поповер выбранной станции открыт легально — ищем именно окно прорыва */
+  const pops = qa('#map .leaflet-popup').map(el => el.textContent);
+  check('прорыв выключен: окно «ПЛОТИНА РАЗРУШЕНА» закрыто',
+    !pops.some(t => /ПЛОТИНА РАЗРУШЕНА/.test(t)),
+    pops.length ? 'остались окна: ' + pops.join(' || ').slice(0, 70) : 'поповеров нет');
+}
 
 /* ---------- учебный сброс ---------- */
-/* подглядываем за созданием поповера: L.popup возвращает объект, у которого
-   потом проверяем offset (именно он отвечает «над маркером окно или под») */
-const popups = [];
-{
-  const orig = window.L.popup;
-  window.L.popup = function(...a){ const p = orig.apply(this, a); popups.push(p); return p; };
-}
+/* popups/L.popup перехвачены выше — до блока «прорыв», чтобы снять и окно
+   «ПЛОТИНА РАЗРУШЕНА» */
 const t0 = Date.now();
 click(q('.scenBtn[data-scen="release"]'));
 await wait(1400);

@@ -439,3 +439,79 @@ test('водохранилище Перовской меняет берег в �
   assert.match(read('model.js'), /function applyReservoirScenario\(res, h, times, scen\)/);
   assert.match(read('model.js'), /function narrowRing\(ring, w\)/);
 });
+
+/* ---------- окно прорыва и зум на станцию ---------- */
+test('окно «ПЛОТИНА РАЗРУШЕНА» открывается под маркером, как при учебном сбросе', () => {
+  const i = app.indexOf('function openPopUnder');
+  assert.ok(i > 0, 'нет общей функции открытия окна «под точкой»');
+  const body = app.slice(i, app.indexOf('\n}', i));
+  assert.match(body, /className: 'breakPop pop-under'/, 'окно не получает класс перевёрнутого хвоста');
+  assert.match(body, /placePopupUnder\(pop\)/, 'окно не смещается на собственную высоту');
+  assert.match(body, /requestAnimationFrame\(\(\) => placePopupUnder\(pop\)\)/,
+    'нет перемера после вёрстки контента — высота окна станет известна позже');
+  /* оба места, где раньше открывалось окно прорыва (DEM-расчёт и декоративный фолбэк) */
+  assert.equal(app.split('openPopUnder(').length - 1, 3,
+    'окно прорыва должно открываться через openPopUnder в двух сценариях + сам хелпер');
+  assert.ok(!/className:\s*'breakPop'/.test(app),
+    'остался L.popup с className breakPop без pop-under — такое окно встанет НАД маркером');
+  /* и закрываться, когда сценарий выключают (иначе «разрушенная плотина» висит над картой) */
+  const st = app.slice(app.indexOf('function stopDamBreak'));
+  assert.match(st.slice(0, 700), /map\.closePopup\(S\.damBreakPop\)/, 'stopDamBreak не закрывает окно');
+  assert.equal(app.split('if (S.damBreakGen !== gen) return;').length - 1, 2,
+    'отложенное окно (таймер 400–500 мс) обязано проверять номер прогона — иначе оно вылезет после выключения сценария');
+  assert.match(app.indexOf('function stopDamBreak') > 0 ? app.slice(app.indexOf('function stopDamBreak')) : '',
+    /S\.damBreakGen = \(S\.damBreakGen \|\| 0\) \+ 1;/, 'stopDamBreak не отменяет отложенные окна');
+  /* finishBreak НЕ закрывает окно: оно подписывает финальный охват,
+     снимает его только выключение сценария (stopDamBreak) */
+  const fi = app.indexOf('function finishBreak');
+  assert.ok(fi > 0, 'finishBreak не найден');
+  assert.ok(!/damBreakPop/.test(app.slice(fi, app.indexOf('\n    }', fi))),
+    'finishBreak закрывает окно прорыва — сразу после анимации карта останется без подписи');
+});
+
+test('выбор ГЭС даёт зум на станцию: кадр = чаша + русло, а не точка на обзоре', () => {
+  assert.match(app, /if \(!framing && S\.scenario !== 'release'\) panToStation\(h\);/,
+    'panToStation по-прежнему только для клика из списка');
+  assert.ok(!/if \(fromList\) panToStation\(h\);/.test(app),
+    'старый «панорамируем, только если выбрали из списка» остался — с маркера зума нет');
+  const i = app.indexOf('function panToStation');
+  const body = app.slice(i, app.indexOf('\n}', i));
+  assert.match(body, /stationBounds\(h\)/, 'кадр не считается по границам объекта');
+  assert.match(body, /maxZoom: zoom \|\| STATION_ZOOM_MAX/, 'нет ограничения максимального зума');
+  assert.match(body, /paddingTopLeft/, 'кадр не учитывает панели — станцию заедет сайдбаром');
+  assert.ok(!/map\.project\(/.test(body),
+    'ручной пересчёт центра через project+unproject — старый способ, он не учитывал размер объекта');
+
+  /* функционально: берём исходник границ из app.js и считаем на реальных данных
+     (тот же приём, что с openMeteoUrls: проверяем живой код, а не его копию) */
+  const src = app.slice(app.indexOf('const STATION_REACH_M'), app.indexOf('function panToStation'));
+  const geo = (() => {
+    const w = {}; new Function('window', read('reservoirs-data.js'))(w);
+    return w.RESERVOIR_GEOMETRY;
+  })();
+  const haversineM = (a, b, c, d) => {
+    const R = 6371000, dLat = (c - a) * Math.PI / 180, dLon = (d - b) * Math.PI / 180;
+    const x = Math.sin(dLat / 2) ** 2 + Math.cos(a * Math.PI / 180) * Math.cos(c * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(x));
+  };
+  const boundsOf = (h, S, RESERVOIR_GEOMETRY) => new Function('h', 'S', 'RESERVOIR_GEOMETRY', 'haversineM',
+    src + '\nreturn stationBounds(h);')(h, { riverCourses: S || {} }, RESERVOIR_GEOMETRY, haversineM);
+  const EPS = 1e-6;
+  const pero = { id: 'pero', lat: 60.67992, lon: 28.95119 };
+
+  /* Перовская: рамка обязана накрыть ВЕСЬ контур (bbox снимка при НПВ) —
+     это и есть та ошибка, из-за которой «зум на ГЭС» показывал не ГЭС */
+  const b1 = boundsOf(pero, {}, geo);
+  assert.ok(b1[0][0] <= 60.676292 + EPS && b1[1][0] >= 60.680235 - EPS, 'по широте контур не накрыт: ' + JSON.stringify(b1));
+  assert.ok(b1[0][1] <= 28.950914 + EPS && b1[1][1] >= 28.958536 - EPS, 'по долготе контур не накрыт: ' + JSON.stringify(b1));
+
+  /* станция без чаши и русла: рамка схлопнута в точку — зум упрётся в maxZoom */
+  assert.deepEqual(boundsOf(pero, {}, {}), [[60.67992, 28.95119], [60.67992, 28.95119]],
+    'без геометрии кадр = точка плотины');
+
+  /* русло ниже плотины входит в кадр, но только первые ~2 км */
+  const course = []; for (let k = 0; k <= 40; k++) course.push([60.67992 + k * 0.00045, 28.95119]);
+  const b3 = boundsOf(pero, { pero: course }, {});
+  const reach = b3[1][0] - 60.67992;
+  assert.ok(reach > 0.015 && reach < 0.022, 'в кадр должно войти ~2 км русла, получили ' + reach.toFixed(5));
+});

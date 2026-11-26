@@ -145,15 +145,54 @@ function panelInsets(){
   const right = cp ? Math.min(sz.x * 0.55, sz.x - cp.left + 10) : 12;
   return { left, right };
 }
+/* Границы «станции»: створ плотины + чаша (реальный контур) + верхние 2 км
+   русла ниже плотины. Раньше при выборе ГЭС был только перелёт на точку с
+   z=7: на обзоре полукилометровый пруд остаётся точкой между зданиями — ни
+   зеркала, ни русла, куда пойдёт волна, не видно. */
+const STATION_REACH_M = 2000;        /* сколько русла ниже плотины брать в кадр */
+const STATION_ZOOM_MAX = 16;         /* ближе не надо: пруд ~0,3 км², дальше — поля */
+const STATION_ZOOM_MIN = 13;
+
+function stationBounds(h){
+  let la0 = h.lat, la1 = h.lat, lo0 = h.lon, lo1 = h.lon;
+  const eat = (la, lo) => {
+    if (!isFinite(la) || !isFinite(lo)) return;
+    if (la < la0) la0 = la;
+    if (la > la1) la1 = la;
+    if (lo < lo0) lo0 = lo;
+    if (lo > lo1) lo1 = lo;
+  };
+  const g = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
+  if (g){
+    /* данные отдают и «список колец», и «одно кольцо» — приводим к списку
+       (тот же признак, что в model.js:ringList — кольцо это массив пар, а
+       список колец — массив массивов пар) */
+    const src = Array.isArray(g) ? g : (g.n || []);
+    const ringsIn = Array.isArray(src[0] && src[0][0]) ? src : [src];
+    for (const ring of ringsIn) for (const pt of (ring || [])) eat(pt && pt[0], pt && pt[1]);
+  }
+  const c = S.riverCourses[h.id];
+  if (c && c.length > 1){
+    let acc = 0;
+    for (let i = 1; i < c.length && acc < STATION_REACH_M; i++){
+      eat(c[i][0], c[i][1]);
+      acc += haversineM(c[i-1][0], c[i-1][1], c[i][0], c[i][1]);
+    }
+  }
+  /* схлопнутую в точку рамку не раздуваем: за «не слишком близко» держит
+     STATION_ZOOM_MAX — иначе мы бы показали чужие поля вместо реальных границ */
+  return [[la0, lo0], [la1, lo1]];
+}
+
 function panToStation(h, zoom){
-  const z = Math.max(map.getZoom(), zoom || 7);
-  const pt = map.project([h.lat, h.lon], z);
-  const sz = map.getSize();
   const { left, right } = panelInsets();
-  const cx = left + (sz.x - left - right) / 2;
-  const center = map.unproject(pt.subtract([cx - sz.x / 2, 0]), z);
-  if (REDUCED_MOTION) map.setView(center, z);
-  else map.flyTo(center, z, { duration: 0.7 });
+  const opts = {
+    paddingTopLeft: [left + 10, 90], paddingBottomRight: [right + 10, 120],
+    maxZoom: zoom || STATION_ZOOM_MAX, minZoom: STATION_ZOOM_MIN
+  };
+  const bnds = stationBounds(h);
+  if (REDUCED_MOTION) map.fitBounds(bnds, opts);
+  else map.flyToBounds(bnds, Object.assign({ duration: 0.7 }, opts));
 }
 
 /* Минимальная ЭКРАННАЯ ширина волны/зоны: на обзорном масштабе (z≈8-10,
@@ -629,6 +668,19 @@ function placePopupUnder(pop){
   pop.options.offset = off;
   pop.update();
   return true;
+}
+
+/* Открыть окно «под точкой» (хвостом вверх) — общий вход для прорыва и
+   сброса: без него Leafet вешает окно НАД маркером и оно накрывает сам створ,
+   плотину и подпись станции. */
+function openPopUnder(latLng, html, opts){
+  const pop = L.popup(Object.assign({
+    maxWidth: 240, autoPan: false, closeButton: false,
+    className: 'breakPop pop-under', offset: [0, 12]
+  }, opts || {})).setLatLng(latLng).setContent(html).openOn(map);
+  placePopupUnder(pop);
+  requestAnimationFrame(() => placePopupUnder(pop));
+  return pop;
 }
 
 async function startRelease(){
@@ -1700,6 +1752,9 @@ async function startDamBreak(){
     });
 
     const realDur = REDUCED_MOTION ? 1 : Math.min(60, Math.max(20, sim.simT / 240));
+    /* номер прогона: по нему отложенные окна понимают, что их уже отменили */
+    const gen = (S.damBreakGen = (S.damBreakGen || 0) + 1);
+    if (S.damBreakPop){ try { map.closePopup(S.damBreakPop); } catch(e){} S.damBreakPop = null; }
     S.damBreak = { id:h.id, progress:0, start:performance.now(), duration: realDur, course };
     $('alertBanner').classList.add('show');
     recompute(); render();
@@ -1707,12 +1762,11 @@ async function startDamBreak(){
     /* простое окошко у плотины: только длина волны */
     const waveKm = courseLength(sim.line.slice(0, maxK + 1)) / 1000;
     setTimeout(() => {
-      L.popup({ maxWidth: 240, autoPan: false, closeButton: false, className: 'breakPop' })
-        .setLatLng([h.lat, h.lon])
-        .setContent(`<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>
+      if (S.damBreakGen !== gen) return;   /* прорыв уже выключили — окно не открываем */
+      S.damBreakPop = openPopUnder([h.lat, h.lon],
+        `<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>
           Длина волны: <b>${fmtNum(waveKm,1)} км</b> · расчёт ${fmtNum(sim.simT/3600,1)} ч<br>
-          <span style="color:#8ba0b6;font-size:10px">${sim.physInfo}</span>`)
-        .openOn(map);
+          <span style="color:#8ba0b6;font-size:10px">${sim.physInfo}</span>`, { maxWidth: 300 });
     }, 500);
 
     /* Один полигон на всю анимацию: меняем только вершины (setLatLngs).
@@ -1755,7 +1809,8 @@ async function startDamBreak(){
         clear(layerFloodZone);
         wavePoly = frontDot = null;
         $('alertBanner').classList.remove('show');
-        S.damBreak = null;
+        S.damBreak = null;   /* окно «ПЛОТИНА РАЗРУШЕНА» остаётся: оно подписывает
+                                финальный охват; снимет его только выключение сценария */
         $('details').innerHTML = detailsHTML(h);
       }, REDUCED_MOTION ? 0 : 2600);
     }
@@ -1795,13 +1850,15 @@ async function startDamBreak(){
     });
   }
 
-  setTimeout(() => {
-    L.popup({ maxWidth: 220, autoPan: false, closeButton: false, className: 'breakPop' })
-      .setLatLng([h.lat, h.lon])
-      .setContent(`<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>Длина волны: <b>${fmtNum(courseLength(course)/1000,1)} км</b>`)
-      .openOn(map);
-  }, 400);
   const duration = Math.max(12, params.baseDuration * 1.25);
+  const gen = (S.damBreakGen = (S.damBreakGen || 0) + 1);
+  if (S.damBreakPop){ try { map.closePopup(S.damBreakPop); } catch(e){} S.damBreakPop = null; }
+  setTimeout(() => {
+    if (S.damBreakGen !== gen) return;
+    S.damBreakPop = openPopUnder([h.lat, h.lon],
+      `<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>Длина волны: <b>${fmtNum(courseLength(course)/1000,1)} км</b>`,
+      { maxWidth: 260 });
+  }, 400);
   S.damBreak = { id:h.id, progress:0, start:performance.now(), duration, course };
   $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${fmtNum(courseLength(course)/1000,0)} км вниз по течению` + (SHOW_DECORATIVE_WAVE?'':' · волна не отрисовывается');
   $('alertBanner').classList.add('show');
@@ -1829,10 +1886,16 @@ async function startDamBreak(){
 }
 
 function stopDamBreak(){
+  /* генерация прогона: отложенное открытие окна (таймер 400–500 мс) не должно
+     вылезти уже после выключения сценария */
+  S.damBreakGen = (S.damBreakGen || 0) + 1;
   S.damBreak = null;
   clear(layerFlood);
   clear(layerFloodZone);
   $('alertBanner').classList.remove('show');
+  /* окно «ПЛОТИНА РАЗРУШЕНА» иначе висит над уже спокойной картой
+     (тот же класс ошибок, что был у учебного сброса до v51) */
+  if (S.damBreakPop){ try { map.closePopup(S.damBreakPop); } catch(e){} S.damBreakPop = null; }
 }
 
 /* ============================================================
@@ -2270,10 +2333,15 @@ async function selectHPP(id, fromList){
   $('chartSub').textContent = `р. ${h.river}`;
 
   if (map){
-    if (fromList) panToStation(h);
+    /* Зум на станцию при ЛЮБОМ выборе — и из списка, и кликом по маркеру.
+       Исключение — сценарии, которые сами правят кадр (прорыв, учебный сброс):
+       у них свой fitBounds, и тянуть его обратно нельзя. */
+    const framing = S.scenario === 'dam_break' && S.damBreak && S.damBreak.id === id;
+    if (!framing && S.scenario !== 'release') panToStation(h);
     /* попап — после панорамы (Leaflet попапы зум не закрывает, так рисуется чище) */
     if (S.scenario !== 'release'){
-      setTimeout(() => { const m = S.markers[id]; if (m) m.openPopup(); }, fromList ? 800 : 0);
+      setTimeout(() => { const m = S.markers[id]; if (m) m.openPopup(); },
+        (REDUCED_MOTION || framing) ? 0 : 800);   /* попап — когда перелёт закончился */
     }
   }
 
