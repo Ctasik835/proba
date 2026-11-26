@@ -189,6 +189,16 @@ input[type=range]:focus-visible{outline:2px solid var(--acc);outline-offset:4px}
    Смещение по вертикали считает app.js:placePopupUnder (offset.y = высота). */
 .leaflet-popup.pop-under .leaflet-popup-tip-container{ top:-20px; bottom:auto; margin-top:0 }
 .leaflet-popup.pop-under .leaflet-popup-tip{ margin:10px auto 0; box-shadow:0 -3px 14px rgba(0,0,0,.4) }
+/* Боковые варианты (река течёт на восток/запад): окно слева или справа от
+   створа, хвост — на боковой грани. Ромбик тот же, просто контейнер повёрнут
+   на 90° и обрезает половину. */
+.leaflet-popup.pop-left .leaflet-popup-tip-container,
+.leaflet-popup.pop-right .leaflet-popup-tip-container{
+  left:auto; top:50%; bottom:auto; margin:-20px 0 0; width:20px; height:40px }
+.leaflet-popup.pop-left  .leaflet-popup-tip-container{ right:-20px }
+.leaflet-popup.pop-right .leaflet-popup-tip-container{ left:-20px; margin-left:0 }
+.leaflet-popup.pop-left  .leaflet-popup-tip{ margin:10px 0 0 -10px }
+.leaflet-popup.pop-right .leaflet-popup-tip{ margin:10px 0 0 10px }
 .leaflet-container a.leaflet-popup-close-button{color:#8ba0b6}
 .leaflet-container{font-family:inherit}
 
