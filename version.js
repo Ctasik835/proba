@@ -5,7 +5,7 @@
    Раньше «v45» приходилось руками править в двух местах — версии разъезжались,
    и пользователи оставались на старом кэше. */
 (function (g) {
-  const APP_VERSION = 'v53';
+  const APP_VERSION = 'v54';
   g.APP_VERSION = APP_VERSION;
   /* доступность из node — для tests/ и npm run version:check */
   if (typeof module === 'object' && module.exports) module.exports = { APP_VERSION };

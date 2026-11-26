@@ -1858,23 +1858,24 @@ function drawReservoir(h, i, lf, overtop){
      Реальный контур в данных один — снимок при НПВ; «засуха» и «паводок»
      (g.d / g.f) оказались его побайтовыми копиями, поэтому прежнее переключение
      колец n/d/f визуально не меняло ничего. Береговая линия считается из
-     моделируемой площади зеркала: кольцо масштабируется вокруг центра bbox,
-     s = √(A/A_НПУ) — см. model.js:reservoirScenario и shorelineRings. */
+     площади зеркала так: полоса воды сжимается к середине русла (засуха) или
+     раздувается на берега (паводок) — model.js:reservoirScenario, shorelineRings. */
   const g = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
   if (g){
     const base = Array.isArray(g) ? g : (g.n || g.d || g.f || []);
-    const sc = (r.shoreScale && r.shoreScale[i] != null && isFinite(r.shoreScale[i])) ? r.shoreScale[i] : 1;
-    /* Масштаб вокруг ВЕРШИНЫ У ПЛОТИНЫ и посадка в чашу (model.js:shorelineRings):
-       при якорении по центру bbox серповидный залив «съезжал» — вода отрывалась
-       от створа на ~60 м, и берег вылезал наружу. */
-    const shore = shorelineRings(base, sc, [h.lat, h.lon]);
+    const wd = (r.shoreWidth && r.shoreWidth[i] != null && isFinite(r.shoreWidth[i])) ? r.shoreWidth[i] : 1;
+    /* Не «масштабировать кольцо вокруг точки» — на серповидном заливе Перовской
+       это давало съезд: вокруг центра bbox вода отрывалась от створа на ~60 м,
+       вокруг створа — хвост уезжал вверх по руслу. shorelineRings двигает каждую
+       вершину поперёк русла, а плотину, устье и концы рукавов не трогает. */
+    const shore = shorelineRings(base, wd);
     const group = L.layerGroup();
     shore.rings.forEach(ring => {
       polyAdd(group, ring, { color, weight:2, opacity:0.95, fill, fillOpacity: op });
     });
     /* граница НПВ — серым пунктиром, когда вода ушла или разлилась за неё:
        без неё «сдувшийся» пруд читается как ошибка данных, а не как засуха */
-    if (Math.abs(sc - 1) > 0.03){
+    if (Math.abs(wd - 1) > 0.03){
       base.forEach(ring => {
         polyAdd(group, ring, { color:'#8ba0b6', weight:1, opacity:0.8, dash:true,
                                fill:'#000000', fillOpacity:0 });
@@ -2343,15 +2344,15 @@ function detailsHTML(h){
      строкой. Без неё пользователь видит только расход и не понимает, почему
      берег уполз; с ней видно, что это схема, а не расчёт подпорной кривой. */
   const dhNow = (r.shoreDh && isFinite(r.shoreDh[i])) ? r.shoreDh[i] : null;
-  const scNow = (r.shoreScale && isFinite(r.shoreScale[i])) ? r.shoreScale[i] : null;
+  const wdNow = (r.shoreWidth && isFinite(r.shoreWidth[i])) ? r.shoreWidth[i] : null;
   /* Строка про площадь — про РИСУЕМЫЙ контур (снимок OSM при НПВ, помноженный
      на поправку), а не про модельную площадь: модель даёт для пруда 0,001 км²
      (своя кривая площадь), и ряды «вот контур на весь залив» + «вот 0,001 км²»
      читались бы как противоречие. Модельное зеркало осталось в попапе — «Зеркало». */
-  /* Долю площади считаем по РИСУЕМЫМ кольцу, а не как s²: при сработке берег
-     ещё и притянут к чаше, поэтому фактическая площадь меньше «бумажной». */
+  /* Долю площади считаем по РИСУЕМОМУ кольцу, а не как «×w»: концы русла и
+     плотина стоят, поэтому фактическая площадь всегда скромнее «бумажной». */
   const shoreDrawn = resEmbedded
-    ? shorelineRings(Array.isArray(gg) ? gg : (gg.n || gg.d || gg.f || []), scNow ?? 1, [h.lat, h.lon])
+    ? shorelineRings(Array.isArray(gg) ? gg : (gg.n || gg.d || gg.f || []), wdNow ?? 1)
     : null;
   const ratio = shoreDrawn ? shoreDrawn.areaRatio : 1;
   const areaShow = h.areaNMU ? h.areaNMU * ratio : null;
@@ -2361,7 +2362,8 @@ function detailsHTML(h){
     }</span></div>` + (
       dhNow != null && Math.abs(dhNow) > 1e-3
         ? `<div class="kv"><span>Поправка «${S.scenario === 'flood' ? 'многоводный год' : 'маловодный год'}»</span><span style="color:${dhNow > 0 ? '#ff8a3d' : '#ffd54a'}">${
-            (dhNow > 0 ? '+' : '') + fmtNum(dhNow, 2) + ' м к отметке · берег ×' + fmtNum(scNow ?? 1, 2)
+            (dhNow > 0 ? '+' : '') + fmtNum(dhNow, 2) + ' м к отметке · берег ' +
+            (wdNow != null && wdNow < 1 ? 'сжат ×' : 'раздут ×') + fmtNum(wdNow ?? 1, 2) + ' поперёк русла'
           }</span></div>`
         : ''
     );

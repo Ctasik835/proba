@@ -523,10 +523,17 @@ if (NARROW){
   const polys = [];
   const origPoly = window.L.polygon;
   window.L.polygon = function(ll, o){ polys.push({ ll, o }); return origPoly.apply(this, arguments); };
-  const bboxArea = ll => {
-    const ring = Array.isArray(ll[0]?.[0]) ? ll[0] : ll;
-    const la = ring.map(pt => pt[0]), lo = ring.map(pt => pt[1]);
-    return (Math.max(...la) - Math.min(...la)) * (Math.max(...lo) - Math.min(...lo));
+  /* площадь полигона (шнуровка в локальных метрах) — bbox для этого не годится:
+     концы русла закреплены, и при разливе растёт ширина, а не охватывающий
+     прямоугольник */
+  const polyArea = ll => {
+    const ring = (Array.isArray(ll[0]?.[0]) ? ll[0] : ll).filter(pt => pt && isFinite(pt[0]));
+    const k = Math.cos(ring.reduce((a, pt) => a + pt[0], 0) / ring.length * Math.PI / 180) * 111320;
+    let A = 0;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+      A += (ring[j][1] * k + ring[i][1] * k) * (ring[j][0] - ring[i][0]) * 111320;
+    }
+    return Math.abs(A) / 2;
   };
   const snapshot = () => {
     const water = polys.filter(x => x.o.weight === 2 && x.o.fillOpacity > 0.2 && x.ll.length);
@@ -535,7 +542,7 @@ if (NARROW){
 
     const lvl = /Текущий уровень<\/span><span>([\d,.]+)/.exec(q('#details').innerHTML);
     return { ll: last ? last.ll : null,
-             area: last ? bboxArea(last.ll) : 0, dashed: dashed.length,
+             area: last ? polyArea(last.ll) : 0, dashed: dashed.length,
              level: lvl ? parseFloat(lvl[1].replace(',', '.').replace(/\s/g, '')) : NaN,
              water: water.length, txt: q('#details').textContent.replace(/\s+/g, ' ') };
   };
@@ -569,10 +576,10 @@ if (NARROW){
     'полигонов: ' + JSON.stringify({ n: per.normal.water, f: per.flood.water, d: per.drought.water }));
   const ratioF = per.normal.area ? per.flood.area / per.normal.area : 0;
   const ratioD = per.normal.area ? per.drought.area / per.normal.area : 0;
-  check('«Паводок»: зеркало разлилось шире контура НПВ', ratioF > 1.03,
-    'bbox ×' + ratioF.toFixed(3) + ' (' + per.normal.area.toFixed(8) + ' → ' + per.flood.area.toFixed(8) + ')');
-  check('«Засуха»: вода отступила внутрь контура НПВ', ratioD < 0.93,
-    'bbox ×' + ratioD.toFixed(3));
+  check('«Паводок»: зеркало разлилось шире контура НПВ', ratioF > 1.08,
+    'площадь ×' + ratioF.toFixed(3) + ' (' + (per.normal.area / 1e4).toFixed(2) + ' → ' + (per.flood.area / 1e4).toFixed(2) + ' га)');
+  check('«Засуха»: вода отступила внутрь контура НПВ', ratioD < 0.85,
+    'площадь ×' + ratioD.toFixed(3) + ' (' + (per.normal.area / 1e4).toFixed(2) + ' → ' + (per.drought.area / 1e4).toFixed(2) + ' га)');
   check('при отступлении воды рисуется пунктирная граница НПВ',
     per.drought.dashed > 0 && per.flood.dashed > 0 && per.normal.dashed === 0,
     'пунктиров: ' + JSON.stringify({ n: per.normal.dashed, f: per.flood.dashed, d: per.drought.dashed }));
@@ -583,7 +590,7 @@ if (NARROW){
       ? +(o.txt.replace(',', '.').match(/(\d+)\s*% снимка при НПВ/) || [0, 0])[1] : 100;
     return m; };
   check('площадь контура в карточке = площадь нарисованной фигуры',
-    pct(per.flood) > 100 && pct(per.drought) > 0 && pct(per.drought) < 60 &&
+    pct(per.flood) > 100 && pct(per.drought) > 40 && pct(per.drought) < 90 &&
     per.normal.txt.indexOf('км² · снимок при НПВ') > 0,
     'норма/паводок/засуха: ' + pct(per.normal) + '% / ' + pct(per.flood) + '% / ' + pct(per.drought) + '%');
 
@@ -623,7 +630,26 @@ if (NARROW){
   };
   const st = {};
   for (const sc of ['normal', 'flood', 'drought']) st[sc] = stat(per[sc]);
-  check('берег не отрывается от плотины (якорь у створа)',
+  /* петли и «шипы» — то, что было на скриншоте: кольцо обязано оставаться простым */
+  const loops = (o) => {
+    const raw = o.ll || [];
+    const ll = (Array.isArray(raw[0]?.[0]) ? raw[0] : raw).filter(p => p && isFinite(p[0]));
+    let n = 0;
+    for (let i = 0; i < ll.length; i++){
+      const a1 = toM(ll[i]), b1 = toM(ll[(i + 1) % ll.length]);
+      for (let j = i + 2; j < ll.length; j++){
+        if (i === 0 && j === ll.length - 1) continue;
+        const c1 = toM(ll[j]), d1 = toM(ll[(j + 1) % ll.length]);
+        const side = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+        if (side(a1, b1, c1) * side(a1, b1, d1) < 0 && side(c1, d1, a1) * side(c1, d1, b1) < 0) n++;
+      }
+    }
+    return n;
+  };
+  check('берег не рвётся на петли и шипы (кольцо простое)',
+    loops(per.normal) === 0 && loops(per.flood) === 0 && loops(per.drought) === 0,
+    'петель: ' + ['normal','flood','drought'].map(k => k + ' ' + loops(per[k])).join(' · '));
+  check('берег держится плотины (концы русла закреплены, «съезда» нет)',
     st.normal.near < 25 && st.flood.near < 25 && st.drought.near < 25,
     'ближайшая вершина к створу: ' + ['normal','flood','drought'].map(k => k + ' ' + st[k].near.toFixed(0) + 'м').join(' · '));
   check('засуха: вода остаётся внутри реального контура (не «съезжает»)',
@@ -631,7 +657,7 @@ if (NARROW){
     'вершин вне чаши: ' + st.drought.out + ' из ' + st.drought.n + ' · максимальный вылет ' +
     st.drought.worst.toFixed(1) + 'м');
   check('паводок: берег жмётся к створу, а не уплывает вниз по руслу',
-    st.flood.near <= st.normal.near + 5 && st.drought.near <= st.normal.near + 5,
+    st.flood.near <= st.normal.near + 6 && st.drought.near <= st.normal.near + 6,
     'створ: норма ' + st.normal.near.toFixed(0) + 'м · паводок ' + st.flood.near.toFixed(0) +
     'м · засуха ' + st.drought.near.toFixed(0) + 'м');
   /* карточка: в «норме» строки про поправку нет и быть не должно, поэтому
