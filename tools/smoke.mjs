@@ -70,7 +70,10 @@ html = html
   .replace('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', 'file://' + path.join(LEAFLET, 'leaflet.js'))
   .replace('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js', 'file://' + CHART_UMD);
 
-const LAT = [60.768, 60.71815, 60.67992, 60.52897, 60.2913, 60.6077];
+/* широты — как в HPPS (krav, andr, pero, igla, rokk, alak): моковый ответ
+   Open-Meteo обязан «походить» на станцию, иначе проверка съедет вместе с
+   координатами — например, у Андреевской створ лежит на русле 60.71783 */
+const LAT = [60.768, 60.71783, 60.67992, 60.52897, 60.2913, 60.6077];
 const NDAYS = 400;
 function days(n){
   const out = [];
@@ -471,6 +474,48 @@ await wait(400);
   check('прорыв выключен: окно «ПЛОТИНА РАЗРУШЕНА» закрыто',
     !pops.some(t => /ПЛОТИНА РАЗРУШЕНА/.test(t)),
     pops.length ? 'остались окна: ' + pops.join(' || ').slice(0, 70) : 'поповеров нет');
+}
+
+/* ---------- сторона окна = против хода воды ---------- */
+{
+  /* Андреевка течёт на юг, поэтому окно обязано встать НАД створом — иначе оно
+     ляжет на русло, по которому как раз бежит волна. Заодно это проверка, что
+     метка Андреевской стоит на реке: прорыв считается по её руслу и профилю. */
+  const n0 = popups.length;
+  click(q('.hppItem[data-id="andr"]'));
+  await wait(800);
+  click(q('.scenBtn[data-scen="dam_break"]'));
+  await wait(2600);
+  const pop = popups.slice(n0).pop();
+  const el = pop && pop.getElement && pop.getElement();
+  const cls = el ? String(el.className) : '';
+  const oy = pop ? pop.options.offset[1] : null;
+  check('Андреевская (вода на юг): окно прорыва встало СВЕРХУ створа',
+    /pop-above/.test(cls) && oy !== null && oy <= 0,
+    'cls=' + (cls || 'нет контейнера') + ' · offset.y=' + oy);
+  check('Андреевская: прорыв считается без ошибок', errors.length === 0, errors.slice(0, 1).join(''));
+  click(q('.scenBtn[data-scen="reset"]'));
+  await wait(300);
+  /* Кравцовская: Селезнёвка течёт на ВСВ — окно обязано уехать влево, чтобы
+     не накрыть русло; это боковой вариант раскладки (хвост на грани окна) */
+  const n1 = popups.length;
+  click(q('.hppItem[data-id="krav"]'));
+  await wait(800);
+  click(q('.scenBtn[data-scen="dam_break"]'));
+  await wait(2600);
+  const pk = popups.slice(n1).pop();
+  const elK = pk && pk.getElement && pk.getElement();
+  const ox = pk ? pk.options.offset[0] : null;
+  check('Кравцовская (вода на восток): окно прорыва уехало СЛЕВА от створа',
+    /pop-left/.test(String(elK && elK.className)) && ox !== null && ox < 0,
+    'cls=' + String(elK && elK.className).replace('leaflet-popup ', '') + ' · offset.x=' + ox);
+  check('боковое окно не перекрывает маркер (смещение >= половины ширины)',
+    ox !== null && elK && Math.abs(ox) >= (elK.getBoundingClientRect().width || 0) / 2,
+    'offset.x=' + ox + ' · ширина=' + (elK ? Math.round(elK.getBoundingClientRect().width) : 0));
+  click(q('.scenBtn[data-scen="reset"]'));
+  await wait(400);
+  click(q('.hppItem[data-id="pero"]'));
+  await wait(800);
 }
 
 /* ---------- учебный сброс ---------- */

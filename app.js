@@ -33,7 +33,11 @@ const HPPS = [
    reservoirName:'пруд Кравцовской МГЭС', damH:3, breachW:29, chanW0:8, chanW1:45,
    damType:'IV класс, гребень 29×1 м, напор 2,5 м (82 года эксплуатации)',
    note:'с 2025 г. идёт демонтаж старой плотины'},
-  {id:'andr', name:'Андреевская ГЭС', river:'Андреевка (Тукалус-Йоки)', lat:60.71815, lon:28.1786, flowDir:170,
+  /* 60.71815, 28.1786 (навигационная точка Wikimapia) лежала на грунтовке в
+     ~150 м восточнее воды — метка «съезжала» с реки. Новая точка — створ на
+     центрлинии OSM у здания станции (OSM way 851438381 «Андреевская ГЭС»,
+     60.7179069, 28.1763864 — в 31 м); русло ниже по течению стартует отсюда. */
+  {id:'andr', name:'Андреевская ГЭС', river:'Андреевка (Тукалус-Йоки)', lat:60.71783, lon:28.17585, flowDir:170,
    capacityMW:0.6, powerLabel:'0,6 МВт', head:7, nmu:99, umo:96.5, areaNMU:0.045,
    totalVolume:0.00012, usefulVolume:0.00004, eff:.85, year:1950, visMinW:30, terrainAmpl:50,
    reservoirName:'пруд Андреевской ГЭС', damH:2.5, breachW:20, chanW0:6, chanW1:35,
@@ -670,16 +674,78 @@ function placePopupUnder(pop){
   return true;
 }
 
-/* Открыть окно «под точкой» (хвостом вверх) — общий вход для прорыва и
-   сброса: без него Leafet вешает окно НАД маркером и оно накрывает сам створ,
-   плотину и подпись станции. */
-function openPopUnder(latLng, html, opts){
+/* Куда ставить окно относительно створа — решает НЕ пожелание «снизу», а
+   направление движения воды: окно обязано остаться с противоположной стороны,
+   иначе оно ложится ровно на русло, по которому бежит волна (на юг → окно
+   сверху, на север → снизу). Знак снимаем с первых ~600 м РЕАЛЬНОГО русла
+   (S.riverCourses / ряд участка сброса), а не со справочной flowDir: русло
+   кривое, и анимируется именно оно. flowDir — только запасной вариант, когда
+   курса ещё нет. У Перовской первые 600 м русла идут на север, поэтому там
+   окно остаётся снизу — прежнее поведение сохранено. */
+const POPUP_GAP_ABOVE = 12;     // зазор «точка → окно», когда окно сверху
+const FLOW_PROBE_M = 600;       // по скольким метрам русла меряем направление тока
+
+/* Смещение воды за первые FLOW_PROBE_M м русла, в метрах: [восток, север].
+   Курс может лежать в массиве и «от створа», и «к створу» — ориентируемся по
+   расстоянию до точки плотины. */
+function waveShift(h, course){
+  const pts = (Array.isArray(course) && course.length >= 3) ? course : null;
+  if (pts){
+    const dTo = p => haversineM(p[0], p[1], h.lat, h.lon);
+    const fwd = dTo(pts[0]) <= dTo(pts[pts.length-1]);
+    const last = pts.length - 1;
+    let i = fwd ? 0 : last, acc = 0;
+    while ((fwd ? i < last : i > 0) && acc < FLOW_PROBE_M){
+      const j = fwd ? i+1 : i-1;
+      acc += haversineM(pts[i][0], pts[i][1], pts[j][0], pts[j][1]);
+      i = j;
+    }
+    if (acc > 50){
+      const a = pts[fwd ? 0 : last], b = pts[i];
+      const mPerDegLat = 111320;
+      return [ (b[1]-a[1]) * mPerDegLat * Math.cos(a[0] * Math.PI/180), (b[0]-a[0]) * mPerDegLat ];
+    }
+  }
+  const fd = ((h.flowDir != null ? h.flowDir : 180)) * Math.PI / 180;
+  return [ Math.sin(fd) * 1000, Math.cos(fd) * 1000 ];
+}
+
+/* Сторона, на которой встанет окно: ПРОТИВ движения воды и по главной оси
+   тока (река на восток → окно слева, на юг → сверху, …) */
+function popSideForFlow(h, course){
+  const [dE, dN] = waveShift(h, course);
+  if (Math.abs(dN) >= Math.abs(dE)) return dN < 0 ? 'above' : 'under';
+  return dE > 0 ? 'left' : 'right';
+}
+
+/* measure → offset. Leaflet привязывает окно нижним краем: +offset.y тянет его
+   вниз, +offset.x — вправо. Отсюда для «под точкой» смещение = высота, для
+   «над» — минус зазор, для боковых — половина ширины (и окно центрируется по
+   точке по вертикали). */
+function placePopupAt(pop, side){
+  const el = pop.getElement && pop.getElement();
+  if (!el) return false;
+  if (side === 'under') return placePopupUnder(pop);
+  const r = el.getBoundingClientRect();
+  const w = r.width || el.offsetWidth || 0, h = r.height || el.offsetHeight || 0;
+  let off = null;
+  if (side === 'left' && w)  off = [-(w/2 + POPUP_TIP_GAP), h/2 + POPUP_TIP_GAP];
+  if (side === 'right' && w) off = [ (w/2 + POPUP_TIP_GAP), h/2 + POPUP_TIP_GAP];
+  if (side === 'above')      off = [0, -POPUP_GAP_ABOVE];
+  if (!off || String(pop.options.offset) === String(off)) return false;
+  pop.options.offset = off;
+  pop.update();
+  return true;
+}
+
+/* Открыть окно у точки — общий вход для прорыва и сброса */
+function openPopAt(latLng, html, opts, side){
   const pop = L.popup(Object.assign({
     maxWidth: 240, autoPan: false, closeButton: false,
-    className: 'breakPop pop-under', offset: [0, 12]
+    className: 'breakPop pop-' + side, offset: [0, side === 'under' ? 12 : -POPUP_GAP_ABOVE]
   }, opts || {})).setLatLng(latLng).setContent(html).openOn(map);
-  placePopupUnder(pop);
-  requestAnimationFrame(() => placePopupUnder(pop));
+  placePopupAt(pop, side);
+  requestAnimationFrame(() => placePopupAt(pop, side));
   return pop;
 }
 
@@ -725,22 +791,15 @@ async function startRelease(){
 
   /* паспорт сценария у плотины — числа из расчёта, а не прописанные в разметке */
   setTimeout(() => {
-    const pop = L.popup({ maxWidth: 300, autoPan: false, closeButton: true,
-                          className: 'breakPop pop-under', offset: [0, 12] })
-      .setLatLng([h.lat, h.lon])
-      .setContent(`<b style="color:#31c9ff">📤 ДОПОЛНИТЕЛЬНЫЙ СБРОС — учебный сценарий</b><br>
+    const pop = openPopAt([h.lat, h.lon], `<b style="color:#31c9ff">📤 ДОПОЛНИТЕЛЬНЫЙ СБРОС — учебный сценарий</b><br>
         Объём источника: <b>${fmtNum(res.volume,0)} м³</b> (${fmtNum(p.cfg.area_m2,0)} м² × ${fmtNum(p.cfg.mean_drawdown_m,2)} м)<br>
         Пик источника: <b>${fmtNum(res.peak,3)} м³/с</b> при t=${fmtNum(p.cfg.peak_time_s/60,0)} мин · T=${fmtNum(p.cfg.duration_s/60,0)} мин<br>
         Фоновый расход Q₀: <b>${fmtNum(res.bg,2)} м³/с</b> (медиана поста 72007, 2008–2012)<br>
         Трансформация: ${res.tau.length} участков по ~${fmtNum(avgReach(p),0)} м, каскад линейных резервуаров, c=${fmtNum(p.cfg.speed_parameter_ms,0)} м/с<br>
         <span style="color:#ffb02e;font-size:10px">Расходы рассчитаны каскадной линейной моделью (учебно).
-        Зона затопления не рассчитывалась.</span>`);
+        Зона затопления не рассчитывалась.</span>`,
+      { maxWidth: 300, closeButton: true }, popSideForFlow(h, line));
     RELEASE.popup = pop;
-    pop.openOn(map);
-    /* высота известна только после вёрстки контента: меряем сейчас и ещё раз
-       на следующем кадре (шрифты, переносы) — дальше окно не дёргается */
-    placePopupUnder(pop);
-    requestAnimationFrame(() => { if (RELEASE.popup === pop) placePopupUnder(pop); });
   }, 1000);
 
   $('alertBanner').classList.add('show');
@@ -1763,10 +1822,11 @@ async function startDamBreak(){
     const waveKm = courseLength(sim.line.slice(0, maxK + 1)) / 1000;
     setTimeout(() => {
       if (S.damBreakGen !== gen) return;   /* прорыв уже выключили — окно не открываем */
-      S.damBreakPop = openPopUnder([h.lat, h.lon],
+      S.damBreakPop = openPopAt([h.lat, h.lon],
         `<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>
           Длина волны: <b>${fmtNum(waveKm,1)} км</b> · расчёт ${fmtNum(sim.simT/3600,1)} ч<br>
-          <span style="color:#8ba0b6;font-size:10px">${sim.physInfo}</span>`, { maxWidth: 300 });
+          <span style="color:#8ba0b6;font-size:10px">${sim.physInfo}</span>`,
+        { maxWidth: 300 }, popSideForFlow(h, course));
     }, 500);
 
     /* Один полигон на всю анимацию: меняем только вершины (setLatLngs).
@@ -1855,9 +1915,9 @@ async function startDamBreak(){
   if (S.damBreakPop){ try { map.closePopup(S.damBreakPop); } catch(e){} S.damBreakPop = null; }
   setTimeout(() => {
     if (S.damBreakGen !== gen) return;
-    S.damBreakPop = openPopUnder([h.lat, h.lon],
+    S.damBreakPop = openPopAt([h.lat, h.lon],
       `<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>Длина волны: <b>${fmtNum(courseLength(course)/1000,1)} км</b>`,
-      { maxWidth: 260 });
+      { maxWidth: 260 }, popSideForFlow(h, course));
   }, 400);
   S.damBreak = { id:h.id, progress:0, start:performance.now(), duration, course };
   $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${fmtNum(courseLength(course)/1000,0)} км вниз по течению` + (SHOW_DECORATIVE_WAVE?'':' · волна не отрисовывается');

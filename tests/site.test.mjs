@@ -355,15 +355,17 @@ test('плашка обновления SW не показывается без 
 });
 
 /* ---------- расположение окна учебного сброса ---------- */
-test('поповер учебного сброса ставится ПОД маркером плотины', () => {
+test('окно учебного сброса ставится с наветренной стороны точки', () => {
   const i = app.indexOf('async function startRelease');
   const block = app.slice(i, app.indexOf(".classList.add('show')", i));
   assert.ok(i > 0 && block.length > 200, 'startRelease не найден');
-  assert.match(block, /className: 'breakPop pop-under'/,
-    'нет класса pop-under — хвост останется снизу, и окно будет смотреть «на маркер»');
-  assert.match(block, /offset: \[0, 12\]/, 'нужен стартовый зазор: высота меряется после вёрстки');
-  assert.match(block, /placePopupUnder\(pop\)/, 'смещение по высоте не применяется');
-  assert.match(block, /RELEASE\.popup = pop/, 'поповер не запоминается → его нечем закрывать');
+  assert.match(block, /openPopAt\(\[h\.lat, h\.lon\]/,
+    'окно сброса не проходит через общий вход openPopAt');
+  assert.match(block, /popSideForFlow\(h, line\)/,
+    'сторона окна не выведена из направления воды на участке');
+  assert.ok(!/className: 'breakPop pop-under'/.test(block),
+    'сторона зашита руками: там, где вода идёт на юг, окно снова ляжет на русло');
+  assert.match(block, /RELEASE\.popup = pop/, 'поповер не запоминается — его нечем закрывать');
 
   /*helper*/
   const helper = app.slice(app.indexOf('function placePopupUnder'), app.indexOf('async function startRelease'));
@@ -441,34 +443,94 @@ test('водохранилище Перовской меняет берег в �
 });
 
 /* ---------- окно прорыва и зум на станцию ---------- */
-test('окно «ПЛОТИНА РАЗРУШЕНА» открывается под маркером, как при учебном сбросе', () => {
-  const i = app.indexOf('function openPopUnder');
-  assert.ok(i > 0, 'нет общей функции открытия окна «под точкой»');
+test('окно прорыва ставится ПРОТИВ хода воды, а не «всегда снизу»', () => {
+  const i = app.indexOf('function openPopAt');
+  assert.ok(i > 0, 'нет общего входа openPopAt');
   const body = app.slice(i, app.indexOf('\n}', i));
-  assert.match(body, /className: 'breakPop pop-under'/, 'окно не получает класс перевёрнутого хвоста');
-  assert.match(body, /placePopupUnder\(pop\)/, 'окно не смещается на собственную высоту');
-  assert.match(body, /requestAnimationFrame\(\(\) => placePopupUnder\(pop\)\)/,
-    'нет перемера после вёрстки контента — высота окна станет известна позже');
-  /* оба места, где раньше открывалось окно прорыва (DEM-расчёт и декоративный фолбэк) */
-  assert.equal(app.split('openPopUnder(').length - 1, 3,
-    'окно прорыва должно открываться через openPopUnder в двух сценариях + сам хелпер');
+  assert.match(body, /className: 'breakPop pop-' \+ side/,
+    'класс стороны должен приходить из аргумента, а не быть прошитым');
+  assert.match(body, /placePopupAt\(pop, side\)/, 'смещение не применяется');
+  assert.match(body, /requestAnimationFrame\(\(\) => placePopupAt\(pop, side\)\)/,
+    'нет перемера после вёрстки контента — размеры окна станут известны позже');
+  assert.equal(app.split('openPopAt([h.lat, h.lon]').length - 1, 3,
+    'окна прорыва (2) и сброса (1) должны открываться через openPopAt');
+  assert.equal(app.split('popSideForFlow(h, course)').length - 1, 3,
+    'оба сценария прорыва обязаны спрашивать направление у курса волны (плюс само определение)');
   assert.ok(!/className:\s*'breakPop'/.test(app),
-    'остался L.popup с className breakPop без pop-under — такое окно встанет НАД маркером');
-  /* и закрываться, когда сценарий выключают (иначе «разрушенная плотина» висит над картой) */
+    'остался L.popup без класса стороны — такое окно сядет на русло');
+
+  /* закрытие по выключению + отмена отложенного открытия по номеру прогона */
   const st = app.slice(app.indexOf('function stopDamBreak'));
   assert.match(st.slice(0, 700), /map\.closePopup\(S\.damBreakPop\)/, 'stopDamBreak не закрывает окно');
   assert.equal(app.split('if (S.damBreakGen !== gen) return;').length - 1, 2,
-    'отложенное окно (таймер 400–500 мс) обязано проверять номер прогона — иначе оно вылезет после выключения сценария');
-  assert.match(app.indexOf('function stopDamBreak') > 0 ? app.slice(app.indexOf('function stopDamBreak')) : '',
-    /S\.damBreakGen = \(S\.damBreakGen \|\| 0\) \+ 1;/, 'stopDamBreak не отменяет отложенные окна');
-  /* finishBreak НЕ закрывает окно: оно подписывает финальный охват,
-     снимает его только выключение сценария (stopDamBreak) */
+    'отложенное окно (400–500 мс) обязано проверять номер прогона');
   const fi = app.indexOf('function finishBreak');
   assert.ok(fi > 0, 'finishBreak не найден');
   assert.ok(!/damBreakPop/.test(app.slice(fi, app.indexOf('\n    }', fi))),
     'finishBreak закрывает окно прорыва — сразу после анимации карта останется без подписи');
+
+  /* сторона — чистая функция: проверяем таблицей направлений на живом коде */
+  const src = app.slice(app.indexOf('const POPUP_GAP_ABOVE'), app.indexOf('function placePopupAt'));
+  assert.ok(src.length > 600, 'не вычленить исходник waveShift/popSideForFlow');
+  const side = (h, course) => new Function('h', 'course', 'haversineM',
+    src + '\nreturn popSideForFlow(h, course);')(h, course, distM);
+  const ray = (dLat, dLon = 0) => [[60.7, 28.9], [60.7 + dLat, 28.9 + dLon],
+    [60.7 + 2 * dLat, 28.9 + 2 * dLon], [60.7 + 3 * dLat, 28.9 + 3 * dLon]];
+  assert.equal(side({ lat: 60.7, lon: 28.9 }, ray(-0.0045)), 'above', 'вода на юг → окно сверху');
+  assert.equal(side({ lat: 60.7, lon: 28.9 }, ray(+0.0045)), 'under', 'вода на север → окно снизу');
+  assert.equal(side({ lat: 60.7, lon: 28.9 }, ray(+0.0002, +0.0045)), 'left',
+    'вода на восток → окно слева, иначе оно ляжет на русло');
+  assert.equal(side({ lat: 60.7, lon: 28.9 }, ray(+0.0002, -0.0045)), 'right', 'вода на запад → окно справа');
+  /* курс может лежать в массиве «с хвоста» — ориентация не должна решать за нас */
+  assert.equal(side({ lat: 60.7, lon: 28.9 }, ray(-0.0045).slice().reverse()), 'above',
+    'перевёрнутый массив курса меняет сторону');
+  /* без курса — опора на flowDir (паспортное направление) */
+  assert.equal(side({ lat: 60.7, lon: 28.9, flowDir: 170 }, null), 'above', 'без русла — flowDir');
+  assert.equal(side({ lat: 60.7, lon: 28.9, flowDir: 350 }, null), 'under');
+  /* Перовская: течение на ССЗ → окно снизу (как просили), Андреевская: на юг → сверху */
+  const w = {};
+  new Function('window', read('rivers-data.js'))(w);
+  const but = f => app.slice(app.indexOf(f), app.indexOf('\n}', app.indexOf(f)));
+  assert.equal(side({ lat: 60.67992, lon: 28.95119 }, w.RIVER_COURSES.pero), 'under', 'Перовская');
+  assert.equal(side({ lat: 60.71783, lon: 28.17585 }, w.RIVER_COURSES.andr), 'above', 'Андреевская');
 });
 
+test('метки станций стоят на русле, а не на дороге рядом', () => {
+  const w = {};
+  new Function('window', read('rivers-data.js'))(w);
+  const courses = w.RIVER_COURSES;
+  const rows = [...app.matchAll(/\{id:'(\w+)', name:'([^']+)', river:'[^']*', lat:([\d.]+), lon:([\d.]+)/g)];
+  assert.ok(rows.length >= 6, 'не разметили список станций — проверка потеряла смысл');
+  for (const [, id, name, lat, lon] of rows){
+    const c = courses[id];
+    assert.ok(c && c.length > 3, name + ': нет русла в rivers-data.js');
+    const d0 = distM(+lat, +lon, c[0][0], c[0][1]);
+    assert.ok(d0 <= 12, name + ': метка в ' + d0.toFixed(0) + ' м от начала русла — створ и курс разъехались');
+    const kink = turnDeg([+lat, +lon], c[1], c[2]);
+    assert.ok(kink <= 45, name + ': вход в русло под ' + kink.toFixed(0) +
+      '° — метка съехала с линии (у Андреевской было 91° и 154 м до воды)');
+  }
+  /* Андреевская: 60.71815, 28.17860 — навигационная точка Wikimapia на грунтовке;
+     здание станции в OSM (way 851438381) лежит в 125 м западнее, у воды. */
+  const andr = rows.find(r => r[1] === 'andr');
+  assert.ok(distM(+andr[3], +andr[4], 60.7179069, 28.1763864) <= 60,
+    'метка Андреевской не у здания ГЭС: ' + andr[3] + ', ' + andr[4]);
+});
+
+function distM(a, b, c, d){
+  const R = 6371000, dLat = (c - a) * Math.PI / 180, dLon = (d - b) * Math.PI / 180;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(a * Math.PI / 180) * Math.cos(c * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+function bearingDeg(p, q){
+  const dLat = q[0] - p[0], dLon = (q[1] - p[1]) * Math.cos(p[0] * Math.PI / 180);
+  return (Math.atan2(dLon, dLat) * 180 / Math.PI + 360) % 360;
+}
+function turnDeg(p, q, r){
+  let a = Math.abs(bearingDeg(p, q) - bearingDeg(q, r));
+  if (a > 180) a = 360 - a;
+  return a;
+}
 test('выбор ГЭС даёт зум на станцию: кадр = чаша + русло, а не точка на обзоре', () => {
   assert.match(app, /if \(!framing && S\.scenario !== 'release'\) panToStation\(h\);/,
     'panToStation по-прежнему только для клика из списка');
