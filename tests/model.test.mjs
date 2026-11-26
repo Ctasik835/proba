@@ -192,3 +192,116 @@ test('movingAverage: окно, границы и пустой вход', () => {
   assert.deepEqual(GES.movingAverage([1, 2, 3], 1), [1, 2, 3]);
   assert.deepEqual(GES.movingAverage(undefined, 5), []);
 });
+
+/* ---------- зеркало водохранилища в сценариях «паводок»/«засуха» ---------- */
+test('reservoirScenario: паводок поднимает зеркало, засуха опускает', () => {
+  const h = { nmu: 17.5, umo: 12, areaNMU: 0.03, totalVolume: 0.00008 };
+  const wet = GES.reservoirScenario(h, 3), dry = GES.reservoirScenario(h, 0.15);
+  assert.ok(wet.dh > 0 && wet.areaRatio > 1 && wet.scale > 1, 'паводок: всё растёт');
+  assert.ok(dry.dh < 0 && dry.areaRatio < 1 && dry.scale < 1, 'засуха: всё падает');
+  assert.ok(Math.abs(dry.dh) > Math.abs(wet.dh), 'ln-зависимость: просадка ×0,15 круще, чем ×3');
+  const one = GES.reservoirScenario(h, 1);
+  assert.equal(one.dh, 0); assert.equal(one.scale, 1); assert.equal(one.areaRatio, 1);
+  /* средняя глубина чаши берётся из паспорта: V/A */
+  assert.ok(Math.abs(wet.depth - (0.00008 * 1e9) / (0.03 * 1e6)) < 1e-9, 'd̄ = V/A_НПУ');
+});
+
+test('reservoirScenario: мусор и неполный паспорт не дают NaN и не вылезают за климпы', () => {
+  const h = { nmu: 17.5, umo: 12, areaNMU: 0.03, totalVolume: 0.00008 };
+  for (const bad of [0, -1, NaN, Infinity, -Infinity, null, undefined, 'x']){
+    assert.deepEqual(GES.reservoirScenario(h, bad), { dh: 0, areaRatio: 1, scale: 1, depth: 0 },
+      'на некорректный множитель — нейтральный ответ, а не NaN');
+  }
+  for (const k of [1e-6, 1e6]){
+    const w = GES.reservoirScenario(h, k);
+    assert.ok(Number.isFinite(w.dh) && Number.isFinite(w.scale) && Number.isFinite(w.areaRatio), 'k=' + k);
+    assert.ok(w.scale >= GES.SHORE_CLAMP.scale[0] && w.scale <= GES.SHORE_CLAMP.scale[1], 'scale в климпе');
+    assert.ok(w.areaRatio >= GES.SHORE_CLAMP.area[0] && w.areaRatio <= GES.SHORE_CLAMP.area[1], 'area в климпе');
+    assert.ok(Math.abs(w.dh) <= 0.8 * (h.nmu - h.umo), 'dh в коридоре берегов');
+  }
+  const noGeom = GES.reservoirScenario({ nmu: 10, umo: 9 }, 2);   // ни площади, ни объёма
+  assert.ok(Number.isFinite(noGeom.dh) && noGeom.scale > 1 && noGeom.scale < 1.51, 'паспорт без водности — схема всё равно конечна');
+});
+
+test('applyReservoirScenario: копия рядов, уровень в коридоре УМО..НПУ, исходник цел', () => {
+  const data = GES.syntheticData(HPP, 'history', { now: Date.UTC(2025, 5, 1) });
+  const base = GES.simulate(HPP, data.hydro, data.clim);
+  assert.equal(GES.applyReservoirScenario(base, HPP, data.hydro.time, 'normal'), base,
+    '«норма» не должна ничего менять ни рядом, ни ссылкой');
+
+  for (const sc of ['flood', 'drought']){
+    const q = data.hydro.q.map((v, k) => v * GES.scenarioFactor(HPP, data.hydro.time[k], sc));
+    const plain = GES.simulate(HPP, { time: data.hydro.time, q }, data.clim);
+    const lvlBefore = plain.level.slice();
+    const adj = GES.applyReservoirScenario(plain, HPP, data.hydro.time, sc);
+    assert.notEqual(adj, plain, 'должна вернуться копия');
+    assert.deepEqual(plain.level, lvlBefore, 'исходный ряд правиться не должен');
+    assert.equal(adj.level.length, plain.level.length);
+    assert.equal(adj.shoreScale.length, plain.level.length);
+    assert.equal(adj.shoreDh.length, plain.level.length);
+    assert.equal(adj.scenarioWater, sc);
+    let moved = 0;
+    for (let i = 0; i < adj.level.length; i++){
+      assert.ok(Number.isFinite(adj.level[i]) && Number.isFinite(adj.area[i]), `${sc}[${i}]: NaN`);
+      assert.ok(adj.level[i] >= HPP.umo - 1e-9 && adj.level[i] <= HPP.nmu + 1e-9,
+        `${sc}[${i}]: уровень ${adj.level[i]} вне коридора ${HPP.umo}..${HPP.nmu}`);
+      assert.ok(adj.area[i] >= 0, 'площадь не может быть отрицательной');
+      assert.ok(Number.isFinite(adj.shoreScale[i]) && adj.shoreScale[i] > 0, 'берег: конечный масштаб');
+      /* зеркало (площадь/масштаб берега) двигается на ВСЕХ датах, а отметка —
+         только там, где пруд не уперся в гребень: полный водосброс не «перельётся»
+         вверх по уровню, зато разлиется по берегам — это физика, а не пропуск */
+      const wetter = sc === 'flood';
+      assert.ok(wetter ? adj.area[i] >= plain.area[i] - 1e-12 : adj.area[i] <= plain.area[i] + 1e-12,
+        `${sc}[${i}]: площадь зеркала должна ${wetter ? 'расти' : 'уменьшаться'}`);
+      if (Math.abs(adj.level[i] - plain.level[i]) > 1e-6) moved++;
+    }
+    assert.ok(moved > 0, `${sc}: хотя бы на части дат отметка сдвигается (сдвинулась на ${moved})`);
+    assert.deepEqual(adj.power, plain.power, 'мощность в этой схеме не пересчитывается');
+  }
+});
+
+test('applyReservoirScenario: зеркало двигается в ЛЮБОМ месяце, а не только в паводок', () => {
+  /* Регрессия на «водохранилище не меняется при засухе/паводке»: пока k брался
+     из pomесечного scenarioFactor (колокол с пиком в апреле), в июле и ноябре
+     k ≈ 1 и берег стоял на месте. now подбираем так, чтобы последний день ряда
+     был в начале лета и в конце осени. */
+  for (const now of [Date.UTC(2025, 6, 5), Date.UTC(2025, 10, 20), Date.UTC(2025, 1, 10)]){
+    const data = GES.syntheticData(HPP, 'history', { now });
+    const base = GES.simulate(HPP, data.hydro, data.clim);
+    const last = base.level.length - 1;
+    for (const sc of ['flood', 'drought']){
+      const adj = GES.applyReservoirScenario(base, HPP, data.hydro.time, sc);
+      const d = new Date(data.hydro.time[last]);
+      assert.ok(Math.abs(adj.shoreDh[last]) > 0.3,
+        `${d.toISOString().slice(0,10)} / ${sc}: сдвиг отметки ${adj.shoreDh[last].toFixed(3)} м — меньше 0,3 м глаз не видит`);
+      assert.ok(Math.abs(adj.shoreScale[last] - 1) > 0.03,
+        `${d.toISOString().slice(0,10)} / ${sc}: берег ×${adj.shoreScale[last].toFixed(3)} — изменения не видно`);
+      assert.ok(sc === 'flood' ? adj.shoreScale[last] > 1 : adj.shoreScale[last] < 1,
+        `${sc}: направление сдвига неверное`);
+    }
+  }
+  /* годовой множитель — вершина колокола (паводок) и её нижняя граница (засуха) */
+  assert.equal(GES.scenarioAnnualFactor({ }, 'flood'), 4);
+  assert.equal(GES.scenarioAnnualFactor({ }, 'drought'), 0.15);
+  assert.equal(GES.scenarioAnnualFactor({ }, 'normal'), 1);
+  assert.ok(GES.WATER_YEAR_WEIGHT > 0.5 && GES.WATER_YEAR_WEIGHT < 1, 'годовое должно dominate помесечное');
+});
+
+test('scaleRing: масштаб вокруг центра bbox и устойчивость к вырожденным кольцам', () => {
+  const ring = [[0, 0], [0, 2], [2, 2], [2, 0]];
+  /* центр bbox = (1, 1); ×2 → [-1..3] */
+  assert.deepEqual(GES.scaleRing(ring, 2), [[-1, -1], [-1, 3], [3, 3], [3, -1]]);
+  assert.deepEqual(GES.scaleRing(ring, 0.5), [[0.5, 0.5], [0.5, 1.5], [1.5, 1.5], [1.5, 0.5]]);
+  assert.equal(GES.scaleRing(ring, 1), ring, 's=1 — вернуть ТО ЖЕ кольцо, без копирования');
+  assert.equal(GES.scaleRing(ring, 0), ring, 's=0 — не масштабировать');
+  assert.equal(GES.scaleRing(ring, NaN), ring, 'NaN-масштаб — кольцо как есть');
+  assert.equal(GES.scaleRing([[0, 0], [1, 1]], 2).length, 2, 'короткое кольцо (<3 точек) не режем');
+  const withNaN = [[0, 0], [NaN, NaN], [2, 2], [2, 0]];
+  const out = GES.scaleRing(withNaN, 1.5);
+  assert.equal(out.length, 4);
+  assert.ok(Number.isFinite(out[0][0]) && Number.isFinite(out[2][0]), 'битая точка не заражает соседей');
+  assert.ok(Number.isNaN(out[1][0]), 'битая точка остаётся битой — polyAdd её отфильтрует');
+  const degenerate = [[5, 5], [5, 5], [5, 5]];
+  assert.deepEqual(GES.scaleRing(degenerate, 3), degenerate, 'нулевой bbox — кольцо не трогаем');
+});
+

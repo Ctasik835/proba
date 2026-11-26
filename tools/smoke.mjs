@@ -516,6 +516,80 @@ if (NARROW){
     !/NaN|undefined/.test(q('#statusText').textContent), q('#statusText').textContent.slice(0, 60));
 }
 
+/* ---------- зеркало водохранилища Перовской в сценариях ---------- */
+{
+  /* Карта при preferCanvas рисует полигоны в canvas — в DOM смотреть нечего,
+     поэтому перехватываем сами L.polygon: аргументом идёт кольцо берега. */
+  const polys = [];
+  const origPoly = window.L.polygon;
+  window.L.polygon = function(ll, o){ polys.push({ ll, o }); return origPoly.apply(this, arguments); };
+  const bboxArea = ll => {
+    const ring = Array.isArray(ll[0]?.[0]) ? ll[0] : ll;
+    const la = ring.map(pt => pt[0]), lo = ring.map(pt => pt[1]);
+    return (Math.max(...la) - Math.min(...la)) * (Math.max(...lo) - Math.min(...lo));
+  };
+  const snapshot = () => {
+    const water = polys.filter(x => x.o.weight === 2 && x.o.fillOpacity > 0.2 && x.ll.length);
+    const dashed = polys.filter(x => x.o.dashArray && x.o.weight === 1);
+    const last = water[water.length - 1];
+    const lvl = /Текущий уровень<\/span><span>([\d,.]+)/.exec(q('#details').innerHTML);
+    return { area: last ? bboxArea(last.ll) : 0, dashed: dashed.length,
+             level: lvl ? parseFloat(lvl[1].replace(',', '.').replace(/\s/g, '')) : NaN,
+             water: water.length, txt: q('#details').textContent.replace(/\s+/g, ' ') };
+  };
+
+  click(q('.hppItem[data-id="pero"]'));
+  await wait(350);
+  const per = {};
+  for (const sc of ['normal', 'flood', 'drought', 'normal']){
+    polys.length = 0;
+    click(q(`.scenBtn[data-scen="${sc}"]`));
+    await wait(500);
+    per[sc] = snapshot();
+    if (process.env.SMOKE_DEBUG) console.log('   dbg', sc, JSON.stringify({
+      scen: window.S.scenario, active: window.S.active,
+      water: window.S.results.pero?.scenarioWater,
+      scales: window.S.results.pero?.shoreScale?.slice(-1),
+      lv: window.S.results.pero?.level?.slice(-1),
+      factor: window.GES.scenarioFactor(window.HYDRO_LOGS.pero, new Date('2026-06-15T00:00:00Z'), sc),
+      hpp: !!window.HYDRO_LOGS.pero.hpp,
+    }));
+  }
+  window.L.polygon = origPoly;
+
+  /* срез строк карточки для диагнозов — объявляем до первого использования */
+  const row = (o) => ['Площадь берегового контура', 'Поправка «'].map(k => {
+      const j = o.txt.indexOf(k);
+      return j < 0 ? '—' : o.txt.slice(j, j + 70).trim();
+    }).join(' // ');
+
+  check('сценарии перерисовывают береговой полигон', per.flood.water > 0 && per.drought.water > 0,
+    'полигонов: ' + JSON.stringify({ n: per.normal.water, f: per.flood.water, d: per.drought.water }));
+  const ratioF = per.normal.area ? per.flood.area / per.normal.area : 0;
+  const ratioD = per.normal.area ? per.drought.area / per.normal.area : 0;
+  check('«Паводок»: зеркало разлилось шире контура НПВ', ratioF > 1.03,
+    'bbox ×' + ratioF.toFixed(3) + ' (' + per.normal.area.toFixed(8) + ' → ' + per.flood.area.toFixed(8) + ')');
+  check('«Засуха»: вода отступила внутрь контура НПВ', ratioD < 0.93,
+    'bbox ×' + ratioD.toFixed(3));
+  check('при отступлении воды рисуется пунктирная граница НПВ',
+    per.drought.dashed > 0 && per.flood.dashed > 0 && per.normal.dashed === 0,
+    'пунктиров: ' + JSON.stringify({ n: per.normal.dashed, f: per.flood.dashed, d: per.drought.dashed }));
+  check('отметка уровня в карточке реагирует на сценарий',
+    per.flood.level >= per.normal.level && per.drought.level < per.normal.level,
+    'засуха ' + per.drought.level + ' · норма ' + per.normal.level + ' · паводок ' + per.flood.level);
+  check('площадь контура в карточке согласована с масштабом берега',
+    per.flood.txt.indexOf('км² · ×') > 0 && per.drought.txt.indexOf('км² · ×') > 0 &&
+    per.normal.txt.indexOf('км² · снимок при НПВ') > 0,
+    'строка: ' + row(per.flood).slice(0, 96));
+  /* карточка: в «норме» строки про поправку нет и быть не должно, поэтому
+     смотрим текст снимка паводка/засухи */
+  check('карточка объясняет поправку',
+    /Площадь берегового контура/.test(per.drought.txt) && /Поправка «маловодный год»/.test(per.drought.txt) &&
+    /Поправка «многоводный год»/.test(per.flood.txt) && !/Поправка «/.test(per.normal.txt),
+    'засуха: ' + row(per.drought) + ' || паводок: ' + row(per.flood));
+  check('зеркало менялось без ошибок страницы', errors.length === 0, errors.slice(0, 1).join(''));
+}
+
 /* ---------- смена режима ---------- */
 click(q('#modeTabs button[data-mode="forecast"]'));
 await wait(2500);

@@ -328,6 +328,114 @@
     return out;
   }
 
+  /* ============================================================
+     ЗЕРКАЛО ВОДОХРАНИЛИЩА В СЦЕНАРИЯХ «ПАВОДОК»/«ЗАСУХА»
+     ============================================================ */
+  /* Почему это отдельная схема. simulate() сознательно держит уровень на
+     целевой отметке — это правило эксплуатации ГЭС, оно нужно для ряда
+     мощности. Из-за него отметка и площадь зеркала на сценарий НЕ реагируют
+     вовсе: при ×3 приток уходит в холостой сброс, при ×0,15 приток и так
+     меньше пропускной способности. На карте это выглядит как «водохранилище
+     не меняется», поэтому здесь — явная схема свободным водосбросом:
+
+        Δh = GAIN · ln k ,          k — водность ГОДА (см. ниже)
+        A/A_НПУ = 1 + Δh / d̄ ,       d̄ = V_полный / A_НПУ — средняя глубина чаши
+        s = √(A/A_НПУ)               линейный масштаб береговой линии
+
+     Множитель k для зеркала НЕ совпадает с помесечным множителем расхода:
+     scenarioFactor рисует колокол паводка (пик ~30-е чис апреля) и спад к
+     осени. Пруд на такой колокол отреагировал бы только в мае: в остальное
+     время k ≈ 1 и берег стоял бы на месте — ровно то, на что указывал
+     вопрос «почему водохранилище не меняется». Уровень же держит годовую
+     водность: многоводный год поднимает пруд к гребню и он стоит высоким до
+     межени, маловодный — опускает к УМО. Поэтому берём годовой множитель
+     (для паводка — вершина колокола, для засухи — её нижняя граница) и
+     подмешиваем к нему текущий день, чтобы зеркало всё же «дышало» при
+     перемотке по году:
+        ln k = 0,7 · ln k_год + 0,3 · ln k_день
+
+     GAIN = 0,5·(НПУ−УМО)/3, то есть на «e-кратное» изменение притока отметка
+     сдвигается на треть половины полезного диапазона. Все числа — из паспорта
+     станции, скрытых коэффициентов нет. Ограничители держат схему в коридоре
+     УМО..НПУ и не дают берегу исчезнуть/выползть за берега, которых в данных нет.
+     Это СХЕМА, не инженерный расчёт подпорных кривых. */
+  const SHORE_CLAMP = { dh: [0.8, 0.35], area: [0.25, 2.2], scale: [0.5, 1.5] };
+
+  /* Доля годового множителя в поправке зеркала и сам годовой множитель. */
+  const WATER_YEAR_WEIGHT = 0.7;
+
+  function scenarioAnnualFactor(h, scen){
+    if (scen === 'flood') return 1 + (Number.isFinite(h && h.floodAmp) ? h.floodAmp : 3.0);
+    if (scen === 'drought'){
+      const floor = Number.isFinite(h && h.droughtMin) ? h.droughtMin : 0.15;
+      return Math.max(0.05, floor);
+    }
+    return 1;
+  }
+
+  function reservoirScenario(h, factor){
+    const none = { dh: 0, areaRatio: 1, scale: 1, depth: 0 };
+    const k = Number(factor);
+    if (!h || !(k > 0) || !isFinite(k)) return none;
+    const band = Math.max(0.5, (Number(h.nmu) - Number(h.umo)) || 1);
+    let dh = (0.5 * band / 3) * Math.log(k);
+    dh = Math.max(-SHORE_CLAMP.dh[0] * band, Math.min(SHORE_CLAMP.dh[1] * band, dh));
+    const A0 = (Number(h.areaNMU) || 0) * 1e6;
+    const V = (Number(h.totalVolume) || 0) * 1e9;
+    const depth = A0 > 0 && V > 0 ? Math.max(0.5, V / A0) : 2;
+    const areaRatio = Math.min(SHORE_CLAMP.area[1], Math.max(SHORE_CLAMP.area[0], 1 + dh / depth));
+    const scale = Math.min(SHORE_CLAMP.scale[1], Math.max(SHORE_CLAMP.scale[0], Math.sqrt(areaRatio)));
+    return { dh, areaRatio, scale, depth };
+  }
+
+  /* Кольцо, масштабированное вокруг центра ограничивающего прямоугольника.
+     На коридоре в ~2 км равноугольная аппроксимация даёт погрешность в доли
+     процента — этим здесь осознанно пренебрегаем. */
+  function scaleRing(ring, s){
+    if (!Array.isArray(ring) || ring.length < 3 || !(s > 0) || Math.abs(s - 1) < 1e-4) return ring;
+    let la0 = Infinity, la1 = -Infinity, lo0 = Infinity, lo1 = -Infinity;
+    for (const p of ring){
+      if (!p || !isFinite(p[0]) || !isFinite(p[1])) continue;
+      if (p[0] < la0) la0 = p[0];
+      if (p[0] > la1) la1 = p[0];
+      if (p[1] < lo0) lo0 = p[1];
+      if (p[1] > lo1) lo1 = p[1];
+    }
+    if (!(la1 > la0) || !(lo1 > lo0)) return ring;
+    const cla = (la0 + la1) / 2, clo = (lo0 + lo1) / 2;
+    return ring.map(p => (p && isFinite(p[0]) && isFinite(p[1]))
+      ? [cla + (p[0] - cla) * s, clo + (p[1] - clo) * s] : p);
+  }
+
+  /* Ряды зеркала по всему ряду дат. Возвращается КОПИЯ: исходный расчёт
+     simulate() остаётся нетронутым (на нём держатся мощность и «прорыв»).
+     Напор и мощность поправкой не трогаются — для пруда в 0,15 МВт это доли
+     киловатт, а расхождение «отметка ↔ выработка» честнее сказать словами,
+     чем нарисовать. */
+  function applyReservoirScenario(res, h, times, scen){
+    if (!res || !Array.isArray(res.level) || !res.level.length) return res;
+    if (scen !== 'flood' && scen !== 'drought') return res;
+    const out = Object.assign({}, res, {
+      level: res.level.slice(), area: res.area.slice(), shoreScale: [], shoreDh: [], scenarioWater: scen
+    });
+    const band = Math.max(0.5, (Number(h.nmu) - Number(h.umo)) || 1);
+    for (let i = 0; i < out.level.length; i++){
+      const kDay = scenarioFactor(h, times && times[i], scen);
+      const kYear = scenarioAnnualFactor(h, scen);
+      const kk = kDay > 0 && kYear > 0
+        ? Math.exp(WATER_YEAR_WEIGHT * Math.log(kYear) + (1 - WATER_YEAR_WEIGHT) * Math.log(kDay))
+        : kYear;
+      const w = reservoirScenario(h, kk);
+      const lvl = out.level[i];
+      out.shoreDh.push(w.dh);
+      out.shoreScale.push(w.scale);
+      if (!isFinite(lvl)) continue;
+      out.level[i] = Math.min(Number(h.nmu), Math.max(Number(h.umo), lvl + w.dh));
+      if (isFinite(out.area[i])) out.area[i] = Math.max(0, out.area[i] * w.areaRatio);
+    }
+    return out;
+  }
+
   const GES = {
     DAY_MS, ISO_RE,
     isoToUTC, utcToISO, todayISO, dayRange, dayOfYear, yearOf, daysInMonth,
@@ -335,6 +443,8 @@
     num, fmtMW, fmtAxisPower, fmtEnergyKWh, fmtDateRu,
     scenarioFactor, syntheticData, HISTORY_START_DEFAULT,
     simulate, damBreakView, movingAverage,
+    reservoirScenario, scaleRing, applyReservoirScenario, SHORE_CLAMP,
+    scenarioAnnualFactor, WATER_YEAR_WEIGHT,
     validateRelease, releaseCalculate
   };
 
