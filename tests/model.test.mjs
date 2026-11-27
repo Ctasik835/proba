@@ -229,8 +229,22 @@ test('reservoirScenario: мусор и неполный паспорт не да
 test('applyReservoirScenario: копия рядов, уровень в коридоре УМО..НПУ, исходник цел', () => {
   const data = GES.syntheticData(HPP, 'history', { now: Date.UTC(2025, 5, 1) });
   const base = GES.simulate(HPP, data.hydro, data.clim);
-  assert.equal(GES.applyReservoirScenario(base, HPP, data.hydro.time, 'normal'), base,
-    '«норма» не должна ничего менять ни рядом, ни ссылкой');
+  /* «норма» тоже получает копию: в ней ряды отметок/площади идут КАК есть,
+     но добавляется берег (shoreWidth/shoreDh) — иначе в режиме климата зеркало
+     меняло бы цвет, а не размер */
+  const norm = GES.applyReservoirScenario(base, HPP, data.hydro.time, 'normal');
+  assert.notEqual(norm, base, 'ожидалась копия');
+  assert.deepEqual(norm.level, base.level, 'в «норме» ряд отметок правиться не должен');
+  assert.deepEqual(norm.area, base.area, 'в «норме» ряд площади правиться не должен');
+  assert.equal(norm.shoreWidth.length, base.level.length);
+  /* берег = снимок при НПВ ровно тогда, когда отметка у НПУ; ниже — сжат */
+  for (let i = 0; i < base.level.length; i++){
+    const lvl = base.level[i], wd = norm.shoreWidth[i];
+    assert.ok(isFinite(wd) && wd >= 0.3 - 1e-9 && wd <= 1.5 + 1e-9, 'берег вне коридора: ' + wd);
+    if (!isFinite(lvl)){ assert.equal(wd, 1, 'на провале ряда отметок поправки быть не должно'); continue; }
+    if (lvl > HPP.nmu - 0.02) assert.ok(wd > 0.98, 'на НПУ берег обязан быть снимком, wd=' + wd);
+    else if (lvl < HPP.nmu - 1) assert.ok(wd < 0.95, 'при ' + lvl.toFixed(2) + ' м берег не сжался: ' + wd);
+  }
 
   for (const sc of ['flood', 'drought']){
     const q = data.hydro.q.map((v, k) => v * GES.scenarioFactor(HPP, data.hydro.time[k], sc));
@@ -256,8 +270,26 @@ test('applyReservoirScenario: копия рядов, уровень в кори�
       const wetter = sc === 'flood';
       assert.ok(wetter ? adj.area[i] >= plain.area[i] - 1e-12 : adj.area[i] <= plain.area[i] + 1e-12,
         `${sc}[${i}]: площадь зеркала должна ${wetter ? 'расти' : 'уменьшаться'}`);
-      assert.ok(wetter ? adj.shoreWidth[i] > 1 : adj.shoreWidth[i] < 1,
-        `${sc}[${i}]: берег должен идти ${wetter ? 'на берега' : 'к середине русла'}`);
+      /* множитель берега теперь = A/A_НПУ собственного ряда (чтобы цифра в
+         карточке и нарисованный контур были одним числом), поэтому при низкой
+         отметке и в «паводок» он меньше 1. Направление сдвига смотрим ОТНОСИТЕЛЬНО
+         «нормы» того же ряда — именно это глазу видно на карте */
+      const nrm = GES.applyReservoirScenario(plain, HPP, data.hydro.time, 'normal');
+      const floor = GES.SHORE_CLAMP.width[0], ceil = GES.SHORE_CLAMP.width[1];
+      const pinned = adj.shoreWidth[i] <= floor + 1e-9 || adj.shoreWidth[i] >= ceil - 1e-9;
+      assert.ok(pinned || (wetter ? adj.shoreWidth[i] > nrm.shoreWidth[i] + 1e-9
+                                  : adj.shoreWidth[i] < nrm.shoreWidth[i] - 1e-9),
+        `${sc}[${i}]: берег ${adj.shoreWidth[i].toFixed(3)} должен ${wetter ? 'расширять' : 'сжимать'} зеркало против нормы ${nrm.shoreWidth[i].toFixed(3)}`);
+      /* берег = (база по фактической отметке) × (множитель года): обе части видно
+         отдельно — shoreScheme это «многоводный/маловодный год», shoreWidth —
+         что реально рисуем. Именно поэтому засуха видна и на полном пруду,
+         и на уже сжатом зимой */
+      const want = Math.min(ceil, Math.max(0.2, nrm.shoreWidth[i] * adj.shoreScheme[i]));
+      assert.ok(Math.abs(adj.shoreWidth[i] - want) < 1e-12,
+        `${sc}[${i}]: берег ${adj.shoreWidth[i].toFixed(4)} ≠ база ${nrm.shoreWidth[i].toFixed(4)} × схема ` +
+        adj.shoreScheme[i].toFixed(4) + ' = ' + want.toFixed(4));
+      assert.ok(adj.shoreWidth[i] <= ceil + 1e-9 && adj.shoreWidth[i] >= 0.2 - 1e-9,
+        `${sc}[${i}]: берег ${adj.shoreWidth[i]} вышел за коридор чаши`);
       if (Math.abs(adj.level[i] - plain.level[i]) > 1e-6) moved++;
     }
     assert.ok(moved > 0, `${sc}: хотя бы на части дат отметка сдвигается (сдвинулась на ${moved})`);
@@ -279,10 +311,11 @@ test('applyReservoirScenario: зеркало двигается в ЛЮБОМ м
       const d = new Date(data.hydro.time[last]).toISOString().slice(0, 10);
       assert.ok(Math.abs(adj.shoreDh[last]) > 0.3,
         `${d} / ${sc}: сдвиг отметки ${adj.shoreDh[last].toFixed(3)} м — меньше 0,3 м глаз не видит`);
-      assert.ok(Math.abs(adj.shoreWidth[last] - 1) > 0.05,
-        `${d} / ${sc}: берег ×${adj.shoreWidth[last].toFixed(3)} — изменения не видно`);
-      assert.ok(sc === 'flood' ? adj.shoreWidth[last] > 1 : adj.shoreWidth[last] < 1,
-        `${sc}: направление сдвига неверное`);
+      const nrm = GES.applyReservoirScenario(base, HPP, data.hydro.time, 'normal');
+      const rel = adj.shoreWidth[last] / (nrm.shoreWidth[last] || 1);
+      assert.ok(sc === 'flood' ? rel > 1.08 : rel < 0.92,
+        `${d} / ${sc}: зеркало ×${adj.shoreWidth[last].toFixed(3)} против нормы ` +
+        `${nrm.shoreWidth[last].toFixed(3)} (×${rel.toFixed(3)}) — изменения не видно`);
     }
   }
   /* годовой множитель — вершина колокола (паводок) и её нижняя граница (засуха) */
@@ -439,4 +472,63 @@ test('shorelineRings: мусор и пустой вход не валят схе
   const single = GES.shorelineRings(RES_GEO.n[0], 0.6);
   assert.equal(single.rings.length, 1);
   assert.ok(single.areaRatio < 1, 'плоское кольцо — то же самое, что список из него');
+});
+
+/* ---------- берег по фактической отметке («норма», режим климата) ---------- */
+const PERO = { nmu: 17.5, umo: 12, areaNMU: 0.03, totalVolume: 0.00008, usefulVolume: 0.00002,
+               capacityMW: 0.15, head: 5.5, eff: 0.82, flowDir: 295, floodAmp: 3.0, droughtMin: 0.15 };
+
+test('shoreWidthFromLevel: берег по фактической отметке, а не по цвету', () => {
+  const f = GES.shoreWidthFromLevel;
+  assert.equal(typeof f, 'function', 'shoreWidthFromLevel не экспортируется');
+  const band = PERO.nmu - PERO.umo;
+  const at = f(PERO, PERO.nmu);
+  assert.equal(at.dh, 0, 'на НПУ поправка нулевая');
+  assert.equal(at.base, 1, 'на НПУ берег = снимок при НПВ');
+  assert.ok(Math.abs(f(PERO, PERO.nmu - band / 2).base - 0.5) < 1e-12,
+    'середина диапазона — половина ширины полосы');
+  assert.equal(f(PERO, PERO.umo).base, GES.SHORE_CLAMP.width[0], 'на УМО чаша не исчезает совсем');
+  assert.equal(f(PERO, PERO.umo - 5).base, GES.SHORE_CLAMP.width[0], 'ниже УМО дальше не сжимается');
+  /* в «норме» зеркало не вылезает за снимок при НПВ — только внутри (v54) */
+  assert.equal(f(PERO, PERO.nmu + 3).base, 1, 'выше НПУ база не раздувается');
+  /* монотонность: чем ниже вода, тем уже полоса */
+  const ladder = [17.5, 17, 16, 15, 14, 13, 12].map(v => f(PERO, v).base);
+  for (let i = 1; i < ladder.length; i++) assert.ok(ladder[i] <= ladder[i-1] + 1e-12, 'не монотонно: ' + ladder.join(' '));
+  /* мусор не роняет и не даёт NaN */
+  for (const bad of [NaN, undefined, null, Infinity, 'мм']){
+    const r = f(PERO, bad);
+    assert.ok(isFinite(r.base) && r.base > 0, 'не конечно при level=' + bad);
+    assert.equal(r.base, 1, 'на мусоре — без поправки: level=' + bad);
+  }
+  assert.equal(f(null, 15).base, 1, 'без паспорта — без поправки');
+  assert.equal(f({ nmu: 17.5 }, 15).base, 1, 'без УМО — без поправки');
+});
+
+test('applyReservoirScenario в «норме» двигает берег, не трогая ряды', () => {
+  const n = 4;
+  const res = { level: [17.5, 16.2, 13.4, 12.0], area: [0.03, 0.024, 0.012, 0.002],
+                power: [0.1, 0.1, 0.1, 0.1], lf: [0.5, 0.5, 0.5, 0.5], flow: [1, 1, 1, 1],
+                spill: [0, 0, 0, 0], head: [5, 5, 5, 5], kwh: 0 };
+  const times = ['2025-01-15', '2025-04-15', '2041-07-15', '2041-08-15'];
+  const out = GES.applyReservoirScenario(res, PERO, times, 'normal');
+  assert.notEqual(out, res, 'ожидалась копия');
+  assert.equal(out.shoreWidth.length, n);
+  assert.ok(out.shoreWidth[0] > 0.999, 'на НПУ берег не должен уползать: ' + out.shoreWidth[0]);
+  assert.ok(out.shoreWidth[2] < 0.7, 'июльская межень обязана сжимать зеркало: ' + out.shoreWidth[2]);
+  assert.deepEqual(out.shoreScheme, [1, 1, 1, 1], 'в «норме» множителя года быть не должно');
+  assert.ok(out.shoreWidth[2] < out.shoreWidth[1], 'ряд берега не монотонен по отметке');
+  /* уровень/площадь климатического ряда — как их посчитал simulate */
+  assert.deepEqual(out.level, res.level, 'в «норме» ряд отметок править нельзя');
+  assert.deepEqual(out.area, res.area, 'в «норме» ряд площади править нельзя');
+  assert.equal(out.scenarioWater, 'normal');
+  /* прорыв и сброс живут своими сценариями — их зеркало не трогаем */
+  for (const scen of ['dam_break', 'release']){
+    assert.equal(GES.applyReservoirScenario(res, PERO, times, scen), res, scen + ' вернул изменённый ряд');
+  }
+  /* схема «паводок»/«засуха» осталась как была */
+  const fl = GES.applyReservoirScenario(res, PERO, times, 'flood');
+  assert.ok(fl.shoreWidth[0] > out.shoreWidth[0], 'паводок должен раздувать берег против нормы: ' +
+    fl.shoreWidth[0] + ' против ' + out.shoreWidth[0]);
+  assert.ok(Math.abs(fl.level[0] - 17.5) > 1e-9 || fl.level[0] === 17.5, 'паводок не сдвинул отметку');
+  assert.ok(fl.level[0] <= PERO.nmu + 1e-9, 'отметка выше НПУ не вылезает');
 });

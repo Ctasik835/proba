@@ -574,6 +574,25 @@
     return { rings: out, areaRatio: a0 > 0 ? a1 / a0 : 1 };
   }
 
+  /* БЕРЕГ по ФАКТИЧЕСКОЙ отметке ряда — «норма» и режим климата.
+     Чем ниже вода в долине, тем уже полоса: 1 + (уровень − НПУ)/(НПУ − УМО), т.е.
+     на УМО чаша пуста, и рисовать тогда весь контур снимка при НПВ — врать
+     про размер (претензия: в климате зеркало меняло только цвет). Ограничитель
+     SHORE_CLAMP.width[0] оставляет на дне протоку — иначе на месяцах ниже
+     НПУ−1·диапазон контур исчезал совсем. Схема «паводок»/«засуха» НЕ заменяет
+     эту базу, а домножает её: маловодный год маловоден и на полном пруду, и на
+     половинке (см. applyReservoirScenario). */
+  function shoreWidthFromLevel(h, level){
+    const nmu = Number(h && h.nmu), umo = Number(h && h.umo);
+    const lvl = typeof level === 'number' ? level : Number(level);
+    if (!isFinite(nmu) || !isFinite(umo) || !isFinite(lvl) || level === null || level === undefined){
+      return { dh: 0, base: 1 };
+    }
+    const band = Math.max(0.5, nmu - umo);
+    const dh = lvl - nmu;
+    return { dh, base: Math.min(1, Math.max(SHORE_CLAMP.width[0], 1 + dh / band)) };
+  }
+
   /* Ряды зеркала по всему ряду дат. Возвращается КОПИЯ: исходный расчёт
      simulate() остаётся нетронутым (на нём держатся мощность и «прорыв»).
      Напор и мощность поправкой не трогаются — для пруда в 0,15 МВт это доли
@@ -581,12 +600,21 @@
      чем нарисовать. */
   function applyReservoirScenario(res, h, times, scen){
     if (!res || !Array.isArray(res.level) || !res.level.length) return res;
-    if (scen !== 'flood' && scen !== 'drought') return res;
+    const scheme = (scen === 'flood' || scen === 'drought');
+    /* «прорыв» и «сброс» живут своими сценариями и зеркало не трогают */
+    if (!scheme && scen !== 'normal') return res;
     const out = Object.assign({}, res, {
-      level: res.level.slice(), area: res.area.slice(), shoreWidth: [], shoreDh: [], scenarioWater: scen
+      level: res.level.slice(), area: res.area.slice(),
+      shoreWidth: [], shoreDh: [], shoreScheme: [], scenarioWater: scen
     });
-    const band = Math.max(0.5, (Number(h.nmu) - Number(h.umo)) || 1);
     for (let i = 0; i < out.level.length; i++){
+      if (!scheme){
+        /* «норма»: отметки и площади — как их посчитал simulate (в т.ч. месячный
+           ряд в режиме климата), берег = сколько воды стоит в чаше прямо сейчас */
+        const sl = shoreWidthFromLevel(h, out.level[i]);
+        out.shoreDh.push(sl.dh); out.shoreWidth.push(sl.base); out.shoreScheme.push(1);
+        continue;
+      }
       const kDay = scenarioFactor(h, times && times[i], scen);
       const kYear = scenarioAnnualFactor(h, scen);
       const kk = kDay > 0 && kYear > 0
@@ -594,8 +622,14 @@
         : kYear;
       const w = reservoirScenario(h, kk);
       const lvl = out.level[i];
+      const base = shoreWidthFromLevel(h, lvl).base;
       out.shoreDh.push(w.dh);
-      out.shoreWidth.push(w.width);
+      out.shoreScheme.push(w.width);
+      /* база по отметке × множитель схемы: сначала «сколько воды в чаше», сверху
+         «многоводный/маловодный год». 0,2 снизу — чтобы засуха на уже сжатом
+         зеркале оставалась видимой (иначе обе полки упёрлись бы в один пол) */
+      out.shoreWidth.push(isFinite(lvl)
+        ? Math.min(SHORE_CLAMP.width[1], Math.max(0.2, base * w.width)) : 1);
       if (!isFinite(lvl)) continue;
       out.level[i] = Math.min(Number(h.nmu), Math.max(Number(h.umo), lvl + w.dh));
       /* площадь зеркала — по ФАКТИЧЕСКОЙ деформации берега (shorelineRings),
@@ -612,7 +646,7 @@
     num, fmtMW, fmtAxisPower, fmtEnergyKWh, fmtDateRu,
     scenarioFactor, syntheticData, HISTORY_START_DEFAULT,
     simulate, damBreakView, movingAverage,
-    reservoirScenario, applyReservoirScenario, SHORE_CLAMP,
+    reservoirScenario, applyReservoirScenario, SHORE_CLAMP, shoreWidthFromLevel,
     scenarioAnnualFactor, WATER_YEAR_WEIGHT,
     shorelineRings, narrowRing, pointInRing, shoelaceXY, planarFrame, ringWidth, rayExit,
     validateRelease, releaseCalculate
