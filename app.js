@@ -206,8 +206,17 @@ function visWidths(w, floor){
   for (let k = 0; k < w.length; k++) out[k] = w[k] > 1 ? Math.max(w[k], floor) : 0;
   return out;
 }
-/* Минимальная визуальная ширина волны для станции: у малых ГТС — десятки метров. */
-function visFloor(h){ return h.visMinW || 500; }
+/* Пол «минимальной видимой ширины» привязан к масштабу. Раньше это было
+   плоское h.visMinW (22 м у Роккаланмяки, 500 м по умолчанию) — на обзоре
+   оправданное, но на крупном плане (z≥15, ~1 м/пикс) оно превращало ручеёк
+   в 200-метровый прямоугольник через поля: волна «рисовалась не по реке».
+   Теперь пол = ~3 пикселя текущего зума, но не больше visMinW станции. */
+function visFloor(h){
+  const cap = h.visMinW || 500;
+  const z = (map && map.getZoom) ? map.getZoom() : 12;
+  const mPerPx = 156543.03392 * Math.abs(Math.cos(((h.lat || 60) * Math.PI) / 180)) / Math.pow(2, z);
+  return Math.min(cap, Math.max(6, 3 * mPerPx));
+}
 
 /* ============================================================
    СОСТОЯНИЕ
@@ -218,6 +227,7 @@ const S = {
   timeIdx:{}, timeLen:{},        // привязка ряда станции к единой дате (model.js)
   markers:{}, reservoirs:{},
   idx:0, playing:false, selected:null,
+  cardKey:'', cardTimer:0, lastCardUpdate:0,   // троттлинг карточки при перемотке
   chartPower:null, chartLevel:null,
   lastChartUpdate:0, loading:false, damBreak:null,
   riverCourses:{}, reservoirsOSM:{},
@@ -1211,12 +1221,14 @@ function recompute(){
 
     const r = setStationSeries(h, null, { hydro: { time: c.hydro.time, q }, clim: c.clim }, null);
 
-    /* Зеркало воды: в «паводке»/«засухе» отметка и площадь пересчитываются
-       схемой свободным водосбросом (model.js:applyReservoirScenario). Без неё
-       пруд не менялся бы вовсе: правило эксплуатации в simulate держит уровень
-       на целевой отметке, а излишек паводка уходит в холостой сброс.
-       applyReservoirScenario возвращает КОПИЮ — исходный ряд не правится. */
-    if (S.scenario === 'flood' || S.scenario === 'drought'){
+    /* Зеркало воды. В «паводке»/«засухе» отметка и площадь пересчитываются
+       схемой свободным водосбросом; в «норме» (и в режиме климата, где ряд
+       месячный и пруд уходит к УМО на всю весну) берег следует ФАКТИЧЕСКОЙ
+       отметке ряда — иначе зеркало висит снимком при НПВ и меняется только
+       цвет. Без поправки пруд не менялся бы вовсе: правило эксплуатации в
+       simulate держит уровень на целевой отметке, а излишек паводка уходит
+       в холостой сброс. applyReservoirScenario возвращает КОПИЮ. */
+    if (S.scenario === 'flood' || S.scenario === 'drought' || S.scenario === 'normal'){
       S.results[h.id] = applyReservoirScenario(r, h, c.hydro.time, S.scenario);
     }
 
@@ -1447,51 +1459,108 @@ function getWaveParams(h){
   return base;
 }
 
-function makeBandPolygon(centerline, widths, latRef){
+/* Профиль ширин лежит на сетке расчёта (ds≈250 м), а ленту рисовать по этой
+   сетке нельзя: на шаге в 250 м излучины ручья спрямляются, и лента идёт
+   через поля (так и выглядело «на Роккаланмяки»). Поэтому геометрию ленты
+   даёт исходное русло, а ряд ширин к нему протягивается по дуговой
+   координате. */
+function widthsAlong(cum, widthsCell, ds){
+  const out = new Float32Array(cum.length);
+  const last = widthsCell.length - 1;
+  for (let j = 0; j < cum.length; j++){
+    const s = cum[j] / ds;
+    const k = Math.max(0, Math.min(last, Math.floor(s)));
+    const t = Math.max(0, Math.min(1, s - k));
+    const wa = widthsCell[k] || 0, wb = widthsCell[Math.min(last, k+1)] || 0;
+    out[j] = wa + (wb - wa) * t;
+  }
+  return out;
+}
+
+/* Chaikin без разрыва с рядом ширин: он ставит новые точки на 1/4 и 3/4
+   отрезка — там же интерполируется и ширина. Прежний вариант «сгладить
+   линию, а ширины брать по номеру точки» сжимал профиль ширин вчетверо,
+   и вся лента получалась равномерной. */
+function chaikinWithWidths(pts, widths, iterations){
+  let p = pts, w = Array.prototype.slice.call(widths);
+  for (let it = 0; it < (iterations || 1) && p.length > 2; it++){
+    const np = [p[0]], nw = [w[0]];
+    for (let i = 0; i < p.length - 1; i++){
+      const A = p[i], B = p[i+1], wa = w[i], wb = w[i+1];
+      np.push([0.75*A[0] + 0.25*B[0], 0.75*A[1] + 0.25*B[1]]); nw.push(wa + (wb - wa)*0.25);
+      np.push([0.25*A[0] + 0.75*B[0], 0.25*A[1] + 0.75*B[1]]); nw.push(wa + (wb - wa)*0.75);
+    }
+    np.push(p[p.length-1]); nw.push(w[w.length-1]);
+    p = np; w = nw;
+  }
+  return { pts: p, widths: w };
+}
+
+/* Радиус описанной окружности трёх соседних точек, метры; 0 — если точки
+   почти на одной линии. Нужен, чтобы полуширина не превышала кривизну:
+   смещение дальше радиуса складывает ленту «бабочкой» и рисует её поперёк
+   излучины вместо того, чтобы идти по ней. */
+function curvRadiusM(a, b, c, degLat, degLon){
+  const ax = a[1]/degLon, ay = a[0]/degLat, bx = b[1]/degLon, by = b[0]/degLat,
+        cx = c[1]/degLon, cy = c[0]/degLat;
+  const A = Math.hypot(bx-cx, by-cy), B = Math.hypot(cx-ax, cy-ay), C = Math.hypot(bx-ax, by-ay);
+  const cross = (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);
+  const area = Math.abs(cross) / 2;
+  if (area < 1e-6 || A*B*C <= 0) return 0;
+  return (A*B*C) / (4*area);
+}
+
+/* Лента заданной ширины вдоль ломаной. widths — ПО ТОЧКАМ centerline
+   (1:1), сглаживание и смещение считаются вместе с ними. */
+function makeBandPolygon(centerline, widths, latRef, smoothIters){
   const R = 6371000;
   const latR = latRef*Math.PI/180;
   const degLat = 180/(Math.PI*R);
   const degLon = 180/(Math.PI*R*Math.cos(latR));
-  const n = centerline.length;
-  const maxW = Math.max(...widths, 1);
+  if (!centerline || centerline.length < 2) return [];
 
-  /* Линия после Chaikin имеет шаг ~60 м. Если смещать её на ширину в
-     километры напрямую, любой поворот даёт самопересечение ("бабочку").
-     Поэтому для построения ленты используем СГЛАЖЕННУЮ центральную линию:
-     окно скользящего среднего ~55% максимальной ширины — кривизна
-     становится мягче полуширины и лента не складывается. */
+  const ch = chaikinWithWidths(centerline, widths, smoothIters == null ? 2 : smoothIters);
+  const pts = ch.pts, w = ch.widths, n = pts.length;
+
+  /* сглаживание центра нужно только очень широким лентам (окно ≈ 45%
+     ширины): на узкой ленте ручья то же окно съедало меандры */
   let segSum = 0;
-  for (let i=1;i<n;i++){
-    segSum += Math.hypot(
-      (centerline[i][0]-centerline[i-1][0])/degLat,
-      (centerline[i][1]-centerline[i-1][1])/degLon);
+  for (let i = 1; i < n; i++){
+    segSum += Math.hypot((pts[i][0]-pts[i-1][0])/degLat, (pts[i][1]-pts[i-1][1])/degLon);
   }
-  const segAvg = Math.max(10, segSum/Math.max(1, n-1));
-  /* локальная ширина — медиана по сегменту, окно сглаживания ≈ 45% от неё */
-  const locW = widths[Math.floor(n/2)] || maxW;
-  const winPts = Math.max(3, Math.round((locW * 0.45) / segAvg));
-
-  const sm = new Array(n);
-  const halfW2 = Math.floor(winPts/2);
-  for (let i=0;i<n;i++){
-    const a = Math.max(0, i-halfW2), b = Math.min(n-1, i+halfW2);
-    let la=0, lo=0;
-    for (let j=a;j<=b;j++){ la+=centerline[j][0]; lo+=centerline[j][1]; }
-    const c = b-a+1;
-    sm[i] = [la/c, lo/c];
+  const segAvg = Math.max(1, segSum/Math.max(1, n-1));
+  let maxW = 1;
+  for (let i = 0; i < n; i++) maxW = Math.max(maxW, w[i] || 0);
+  const locW = w[Math.floor(n/2)] || maxW;
+  const winPts = Math.round((locW * 0.45) / segAvg);
+  let sm = pts;
+  if (winPts >= 3){
+    const half = Math.floor(winPts/2);
+    sm = new Array(n);
+    for (let i = 0; i < n; i++){
+      const a = Math.max(0, i-half), b = Math.min(n-1, i+half);
+      let la = 0, lo = 0;
+      for (let j = a; j <= b; j++){ la += pts[j][0]; lo += pts[j][1]; }
+      const c = b - a + 1;
+      sm[i] = [la/c, lo/c];
+    }
   }
 
   const left = [], right = [];
-  for (let i=0;i<n;i++){
+  for (let i = 0; i < n; i++){
     let dLat, dLon;
-    if (i===0){ dLat=sm[1][0]-sm[0][0]; dLon=sm[1][1]-sm[0][1]; }
-    else if (i===n-1){ dLat=sm[i][0]-sm[i-1][0]; dLon=sm[i][1]-sm[i-1][1]; }
-    else { dLat=sm[i+1][0]-sm[i-1][0]; dLon=sm[i+1][1]-sm[i-1][1]; }
+    if (i === 0){ dLat = sm[1][0]-sm[0][0]; dLon = sm[1][1]-sm[0][1]; }
+    else if (i === n-1){ dLat = sm[i][0]-sm[i-1][0]; dLon = sm[i][1]-sm[i-1][1]; }
+    else { dLat = sm[i+1][0]-sm[i-1][0]; dLon = sm[i+1][1]-sm[i-1][1]; }
     const dxM = dLon/degLon, dyM = dLat/degLat;
     const lenM = Math.hypot(dxM, dyM) || 1;
     const nxM = -dyM/lenM, nyM = dxM/lenM;
 
-    const halfW = Math.max(15, (widths[i] ?? widths[widths.length-1])/2);
+    let halfW = Math.max(6, (w[i] != null ? w[i] : w[w.length-1]) / 2);
+    if (i > 0 && i < n-1){
+      const rr = curvRadiusM(sm[i-1], sm[i], sm[i+1], degLat, degLon);
+      if (rr > 0) halfW = Math.min(halfW, 0.85 * rr);
+    }
     const offLat = nyM*halfW*degLat;
     const offLon = nxM*halfW*degLon;
     left.push([sm[i][0]+offLat, sm[i][1]+offLon]);
@@ -1550,9 +1619,8 @@ function makeFloodWaveFromCourse(h, course, progress){
   const decay = progress > 0.78 ? Math.max(0, 1 - (progress - 0.78) / 0.22) : 1;
   const frontLen = totalLen * Math.min(1, progress);
   if (frontLen < 250) return null;
-  let trimmed = trimCourse(course, frontLen);
+  const trimmed = trimCourse(course, frontLen);
   if (trimmed.length < 2) return null;
-  trimmed = chaikinSmooth(trimmed, 3);
   const n = trimmed.length;
   const W = Math.min(params.maxWidth, 300) * ramp * (0.45 + 0.55 * decay);
   const widths = trimmed.map((_, i) => {
@@ -1562,7 +1630,7 @@ function makeFloodWaveFromCourse(h, course, progress){
     const startRamp = s < 0.04 ? 0.25 + 0.75*s/0.04 : 1; // сужение у плотины (без «воротника»)
     return Math.max(10, W * taper * snout * startRamp);
   });
-  const pts = makeBandPolygon(trimmed, widths, h.lat);
+  const pts = makeBandPolygon(trimmed, widths, h.lat, 3);
   return { pts, params, front: trimmed[n-1], decay };
 }
 
@@ -1571,7 +1639,7 @@ function makeFloodWaveFromCourse(h, course, progress){
    раз под движущейся волной бледным слоем «зона затопления». */
 function makeFloodFootprint(h, course){
   const params = getWaveParams(h);
-  let trimmed = chaikinSmooth(course, 2);
+  const trimmed = course;
   const n = trimmed.length;
   if (n < 2) return null;
   const W = params.maxWidth * 1.1;
@@ -1582,7 +1650,7 @@ function makeFloodFootprint(h, course){
     const startRamp = s < 0.04 ? 0.25 + 0.75*s/0.04 : 1;
     return Math.max(10, W * taper * snout * startRamp);
   });
-  return { pts: makeBandPolygon(trimmed, widths, h.lat), params };
+  return { pts: makeBandPolygon(trimmed, widths, h.lat, 2), params };
 }
 
 /* ============================================================
@@ -1752,7 +1820,7 @@ function simulateDamBreak(h, course, elev){
     }
   }
   const lastF = frames[frames.length-1] || { front: 0 };
-  return { line, ds, N, L, frames, maxW, simT: t, H0eff,
+  return { line, ds, N, L, cum, course, frames, maxW, simT: t, H0eff,
            frontKm: lastF.front*ds/1000,
            physInfo: `H₀=${fmtNum(H0eff,0)} м, Мэннинг n=${fmtNum(MANNING_N,2)}` };
 }
@@ -1794,9 +1862,23 @@ async function startDamBreak(){
     let maxK = sim.N;
     while (maxK > 1 && sim.maxW[maxK] < 1) maxK--;
     maxK = Math.max(maxK, 2);
-    const footPts = makeBandPolygon(
-      chaikinSmooth(sim.line.slice(0, maxK + 1), 2),
-      Array.from(visWidths(sim.maxW.slice(0, maxK + 1), visFloor(h))), h.lat);
+    /* Ленту (и зону затопления, и каждый кадр) строим по ИСХОДНОМУ руслу, а не
+       по сетке расчёта: на 250-метровых ячейках излучины ручья спрямляются, и
+       лента шла через поля — ровно то, что было видно на Роккаланмяки. Ряд
+       ширин с расчётной сетки протягивается на геометрию по дуговой
+       координате (widthsAlong). */
+    function bandOnCourse(widthsCell, uptoCell){
+      const sEnd = Math.min(sim.L, uptoCell*sim.ds);
+      let m = 1;
+      while (m < course.length && sim.cum[m] <= sEnd) m++;
+      const pts = course.slice(0, m), cum = sim.cum.slice(0, m);
+      if (m < course.length && sim.line[uptoCell]){ pts.push(sim.line[uptoCell]); cum.push(sEnd); }
+      return { pts, w: visWidths(widthsAlong(cum, widthsCell, sim.ds), visFloor(h)) };
+    }
+    const footPoints = () => {
+      const band = bandOnCourse(sim.maxW, maxK);
+      return makeBandPolygon(band.pts, band.w, h.lat);
+    };
 
     /* перенос и зум на зону прорыва, чтобы волну было видно */
     const seg = sim.line.slice(0, maxK + 1);
@@ -1805,7 +1887,7 @@ async function startDamBreak(){
     const pad  = { paddingTopLeft: [panelInsets().left + 10, 90], paddingBottomRight: [panelInsets().right + 10, 120] };
     if (REDUCED_MOTION) map.fitBounds(bnds, pad);
     else map.flyToBounds(bnds, Object.assign({ duration: 0.7 }, pad));
-    polyAdd(layerFloodZone, footPts, {
+    let footPoly = polyAdd(layerFloodZone, footPoints(), {
       color:'#ff9400', weight:1.5, opacity:0.85, dash:true,
       fill:'#ffa726', fillOpacity:0.20
     });
@@ -1814,7 +1896,11 @@ async function startDamBreak(){
     /* номер прогона: по нему отложенные окна понимают, что их уже отменили */
     const gen = (S.damBreakGen = (S.damBreakGen || 0) + 1);
     if (S.damBreakPop){ try { map.closePopup(S.damBreakPop); } catch(e){} S.damBreakPop = null; }
-    S.damBreak = { id:h.id, progress:0, start:performance.now(), duration: realDur, course };
+    S.damBreak = { id:h.id, progress:0, start:performance.now(), duration: realDur, course,
+      /* «экранная» минимальная ширина ленты зависит от масштаба (visFloor) —
+         при смене зума пунктир зоны затопления перестраивается, иначе он
+         остаётся рассчитанным на том зуме, на котором сценарий включили */
+      redrawBand(){ if (footPoly) footPoly.setLatLngs(footPoints()); } };
     $('alertBanner').classList.add('show');
     recompute(); render();
     $('details').innerHTML = detailsHTML(h);
@@ -1836,9 +1922,8 @@ async function startDamBreak(){
     function drawFrame(fr){
       const upto = Math.min(sim.N, Math.max(2, Math.round(fr.front)));
       if (upto > 1){
-        const lineTrim = sim.line.slice(0, upto + 1);
-        const wTrim = visWidths(fr.w.subarray(0, upto + 1), visFloor(h));
-        const pts = makeBandPolygon(chaikinSmooth(lineTrim, 2), wTrim, h.lat);
+        const band = bandOnCourse(fr.w, upto);
+        const pts = makeBandPolygon(band.pts, band.w, h.lat);
         const depth = Math.min(1, fr.hmax / 15);
         const style = {
           color:'#ff3b3b', weight:1.5, opacity:0.85,
@@ -2111,6 +2196,8 @@ function buildUI(){
   updateStationAvailability();
 
   $('slider').oninput = e => { S.idx = +e.target.value; render(); };
+  /* отпускание бегунка — карточка догоняет дату без всякого троттлинга */
+  $('slider').onchange = () => scheduleCard(true);
   $('playBtn').onclick = togglePlay;
 
   /* Панели на узких экранах складываются в выдвижные — иначе на телефоне
@@ -2348,6 +2435,33 @@ function render(){
   }
 
   if (S.selected) updateChart();
+  /* в «прорыве» карточку ведёт цикл кадров — не мешаем ему */
+  if (S.selected && !S.damBreak) scheduleCard();
+}
+
+/* Карточка выбранной станции — по ту дату, что стоит на бегунке. Раньше её
+   HTML пересобирался только при смене станции или сценария, поэтому при
+   перемотке (и в особенности в режиме климата, где ряд месячный) «Текущий
+   уровень», «Дата ряда» и площадь берегового контура оставались вчерашними:
+   зеркало на карте двигалось, а цифры — нет. Пересборка недешёвая (detailsHTML
+   считает деформацию берега), поэтому не чаще раза в 250 мс, но последний
+   кадр прогоняем обязательно — иначе панель встанет на середине ряда.
+   В «сбросе» карточка принадлежит сценарию, её не трогаем. */
+function scheduleCard(force){
+  const key = S.idx + '|' + S.mode + '|' + S.scenario;
+  if (S.cardKey === key && !force) return;
+  const now = (window.performance || Date).now();
+  if (!force && now - (S.lastCardUpdate || -1e9) <= 250){
+    if (!S.cardTimer) S.cardTimer = setTimeout(() => { S.cardTimer = 0; scheduleCard(true); }, 260);
+    return;
+  }
+  if (S.cardTimer){ clearTimeout(S.cardTimer); S.cardTimer = 0; }
+  const h = HPPS.find(x => x.id === S.selected);
+  if (!h || S.scenario === 'release') return;
+  S.cardTimer = 0;
+  S.cardKey = key;
+  S.lastCardUpdate = now;
+  $('details').innerHTML = detailsHTML(h);
 }
 
 function capLabel(h){
@@ -2471,6 +2585,7 @@ function detailsHTML(h){
   /* Про зеркало воды: площадь — из модели, поправка сценария — отдельной
      строкой. Без неё пользователь видит только расход и не понимает, почему
      берег уполз; с ней видно, что это схема, а не расчёт подпорной кривой. */
+  const scenScheme = (S.scenario === 'flood' || S.scenario === 'drought');
   const dhNow = (r.shoreDh && isFinite(r.shoreDh[i])) ? r.shoreDh[i] : null;
   const wdNow = (r.shoreWidth && isFinite(r.shoreWidth[i])) ? r.shoreWidth[i] : null;
   /* Строка про площадь — про РИСУЕМЫЙ контур (снимок OSM при НПВ, помноженный
@@ -2479,6 +2594,9 @@ function detailsHTML(h){
      читались бы как противоречие. Модельное зеркало осталось в попапе — «Зеркало». */
   /* Долю площади считаем по РИСУЕМОМУ кольцу, а не как «×w»: концы русла и
      плотина стоят, поэтому фактическая площадь всегда скромнее «бумажной». */
+  /* «на сколько раз шире/уже полоса»: в паводок/засуху — множитель СХЕМЫ (год),
+     в «норме» — фактический размер полосы против снимка при НПВ */
+  const wdTxt = (scenScheme && r.shoreScheme && isFinite(r.shoreScheme[i])) ? r.shoreScheme[i] : wdNow;
   const shoreDrawn = resEmbedded
     ? shorelineRings(Array.isArray(gg) ? gg : (gg.n || gg.d || gg.f || []), wdNow ?? 1)
     : null;
@@ -2489,9 +2607,11 @@ function detailsHTML(h){
         (Math.abs(ratio - 1) > 0.01 ? fmtNum(ratio * 100, 0) + '% снимка при НПВ' : 'снимок при НПВ') : '—'
     }</span></div>` + (
       dhNow != null && Math.abs(dhNow) > 1e-3
-        ? `<div class="kv"><span>Поправка «${S.scenario === 'flood' ? 'многоводный год' : 'маловодный год'}»</span><span style="color:${dhNow > 0 ? '#ff8a3d' : '#ffd54a'}">${
-            (dhNow > 0 ? '+' : '') + fmtNum(dhNow, 2) + ' м к отметке · берег ' +
-            (wdNow != null && wdNow < 1 ? 'сжат ×' : 'раздут ×') + fmtNum(wdNow ?? 1, 2) + ' поперёк русла'
+        ? `<div class="kv"><span>${scenScheme
+            ? 'Поправка «' + (S.scenario === 'flood' ? 'многоводный год' : 'маловодный год') + '»'
+            : 'Отметка ниже НПУ'}</span><span style="color:${dhNow > 0 ? '#ff8a3d' : '#ffd54a'}">${
+            (dhNow > 0 ? '+' : '') + fmtNum(dhNow, 2) + ' м' + (scenScheme ? ' к отметке' : ' (ровно ' + fmtNum(r.level[i], 2) + ' м)') + ' · берег ' +
+            (wdTxt != null && wdTxt < 1 ? 'сжат ×' : 'раздут ×') + fmtNum(wdTxt ?? 1, 2) + ' поперёк русла'
           }</span></div>`
         : ''
     );
@@ -2906,6 +3026,9 @@ function makeWindowsDraggable(){
   makeDraggable('statusBar', null, { moveOnly:true });
   /* смена размера окна / поворот телефона — пересобрать раскладку */
   let t = 0;
+  /* масштаб поменялся — лента прорыва пересчитывается (её пол видимости
+     привязан к зуму); без этого пунктир зоны остаётся «с того» масштаба */
+  map.on('zoomend', () => { if (S.damBreak && S.damBreak.redrawBand) S.damBreak.redrawBand(); });
   window.addEventListener('resize', () => {
     clearTimeout(t);
     t = setTimeout(() => { restoreWindows(); map.invalidateSize(); }, 180);

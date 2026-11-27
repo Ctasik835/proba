@@ -577,3 +577,170 @@ test('выбор ГЭС даёт зум на станцию: кадр = чаша
   const reach = b3[1][0] - 60.67992;
   assert.ok(reach > 0.015 && reach < 0.022, 'в кадр должно войти ~2 км русла, получили ' + reach.toFixed(5));
 });
+
+/* ---------- лента прорыва: по руслу, а не по сетке расчёта ---------- */
+function grabFn(name){
+  const i = app.indexOf('function ' + name + '(');
+  assert.ok(i > 0, 'во flash-исходнике нет ' + name);
+  let d = 0;
+  for (let k = app.indexOf('{', i); k < app.length; k++){
+    if (app[k] === '{') d++;
+    else if (app[k] === '}'){ d--; if (!d) return app.slice(i, k + 1); }
+  }
+  throw new Error('не закрылась ' + name);
+}
+const GEO = (() => {
+  const src = ['resampleUniform', 'widthsAlong', 'chaikinWithWidths', 'curvRadiusM', 'makeBandPolygon']
+    .map(grabFn).join('\n');
+  const hav = `function haversineM(a,b,c,d){const R=6371000,pl=a*Math.PI/180,pc=c*Math.PI/180,
+    dp=(c-a)*Math.PI/180,dl=(d-b)*Math.PI/180;
+    const x=Math.sin(dp/2)**2+Math.cos(pl)*Math.cos(pc)*Math.sin(dl/2)**2;
+    return 2*R*Math.asin(Math.sqrt(x));}`;
+  return new Function(hav + '\n' + src + '\nreturn { resampleUniform, widthsAlong, makeBandPolygon };')();
+})();
+
+test('лента прорыва идёт по руслу, а не по спрямлённой сетке расчёта', () => {
+  const w = {};
+  new Function('window', read('rivers-data.js'))(w);
+  const course = w.RIVER_COURSES.rokk;                 /* та самая Птичья у Роккаланмяки */
+  const lat = 60.2913, DS = 250;
+  const { line, cum, N } = GEO.resampleUniform(course, DS);
+  assert.ok(N >= 10, 'сетка расчёта слишком грубая для проверки: N=' + N);
+  const cellW = new Float32Array(N + 1);
+  for (let k = 0; k <= N; k++) cellW[k] = 22 + 38 * (k / N);
+
+  const distToCourse = (p) => {
+    const kx = 111320 * Math.cos(lat * Math.PI / 180);
+    let best = Infinity;
+    for (let i = 1; i < course.length; i++){
+      const ax = course[i-1][1]*kx, ay = course[i-1][0]*110574;
+      const bx = course[i][1]*kx, by = course[i][0]*110574;
+      const px = p[1]*kx, py = p[0]*110574;
+      const dx = bx-ax, dy = by-ay, l2 = dx*dx + dy*dy;
+      let t = l2 ? ((px-ax)*dx + (py-ay)*dy)/l2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      best = Math.min(best, Math.hypot(px - (ax + t*dx), py - (ay + t*dy)));
+    }
+    return best;
+  };
+  const spread = (band) => {
+    const pts = band.filter(p => isFinite(p[0]) && isFinite(p[1]));
+    const d = pts.map(distToCourse);
+    return { n: pts.length, max: Math.max(...d) };
+  };
+  /* как рисовало «до»: центр ленты — сетка ds, ширины берутся по номеру точки */
+  const old = spread(GEO.makeBandPolygon(line.slice(), Array.from(cellW), lat, 2));
+  /* как рисует «теперь»: геометрия — исходное русло, ширины протянуты по дуге */
+  const wNew = GEO.widthsAlong(cum, cellW, DS);
+  const maxHalf = Math.max(...Array.from(wNew)) / 2;
+  const now = spread(GEO.makeBandPolygon(course, wNew, lat));
+  assert.ok(now.n > old.n, 'на русле точек больше, чем на сетке 250 м: ' + now.n + ' vs ' + old.n);
+  assert.ok(now.max <= maxHalf + 3,
+    'лента уходит от воды на ' + now.max.toFixed(0) + ' м при полуширине ' + maxHalf.toFixed(0) + ' м');
+  assert.ok(old.max > now.max * 1.5,
+    'проверка должна ловить прежний вариант: старое отклонение ' + old.max.toFixed(0) +
+    ' м, новое ' + now.max.toFixed(0) + ' м');
+
+  /* лента не должна складываться на излучинах: полуширину ограничивает
+     кривизна русла — проверим, что curvRadiusM её честно измеряет */
+  const curv = new Function('a', 'b', 'c', 'degLat', 'degLon',
+    grabFn('curvRadiusM') + '\nreturn curvRadiusM(a, b, c, degLat, degLon);');
+  const dLat = 1/110574, dLon = 1/55000;
+  const R0 = 300;
+  const arc = [0, 0.1, 0.2].map(t => [60.29 + R0*Math.sin(t)*dLat, 29.8 + R0*Math.cos(t)*dLon]);
+  const r = curv(arc[0], arc[1], arc[2], dLat, dLon);
+  assert.ok(Math.abs(r - R0) < 12, 'радиус дуги в ' + R0 + ' м измерен как ' + r.toFixed(0));
+  assert.equal(curv([60.29, 29.8], [60.2905, 29.801], [60.291, 29.802], dLat, dLon), 0,
+    'на прямой ограничитель срабатывать не должен');
+
+  /* ряд ширин протягивается по дуге монотонно и без потерь на конце */
+  const ramp = new Array(N + 1).fill(0).map((_, k) => k + 1);
+  const pulled = GEO.widthsAlong(cum, ramp, DS);
+  assert.ok(cum.every((c, i) => Math.abs(pulled[i] - (c/DS + 1)) < 1.01),
+    'ширина не следует за дуговой координатой');
+  assert.ok(pulled[cum.length-1] > ramp[N] * 0.5, 'хвост ряда ширин потерялся');
+});
+
+test('«экранина» минимальная ширина ленты зависит от масштаба', () => {
+  const src = grabFn('visFloor');
+  assert.match(src, /map\.getZoom\(\)/, 'пол не привязан к зуму — на крупном плане он снова раздует ручеёк в прямоугольник');
+  assert.match(src, /Math\.min\(cap,/, 'пол обязан быть не больше visMinW станции');
+  const f = new Function('h', 'map', src + '\nreturn visFloor(h);');
+  const h = { visMinW: 22, lat: 60.2913 };
+  const z16 = f(h, { getZoom: () => 16 });
+  const z9 = f(h, { getZoom: () => 9 });
+  assert.ok(z16 < 10, 'на z16 пол должен быть порядка метров, получили ' + z16);
+  assert.equal(z9, 22, 'на обзоре пол = visMinW станции, получили ' + z9);
+  assert.ok(f({ lat: 60 }, { getZoom: () => 3 }) <= 500, 'без visMinW — не больше прежних 500 м');
+});
+
+test('зеркало в «норме» подключено к перерасчёту и объяснено в карточке', () => {
+  const i = app.indexOf('function recompute(){');
+  const block = app.slice(i, app.indexOf('\n}\n', i));
+  assert.match(block, /S\.scenario === 'flood' \|\| S\.scenario === 'drought' \|\| S\.scenario === 'normal'/,
+    'applyReservoirScenario не вызывается для «нормы» — в режиме климата берег останется снимком при НПВ');
+  assert.match(app, /const scenScheme = \(S\.scenario === 'flood' \|\| S\.scenario === 'drought'\);/,
+    'карточка не различает схему сценария и фактическую отметку');
+  assert.match(app, /Отметка ниже НПУ/, 'нет строки, объясняющей сжатие берега по ряду');
+  /* лента прорыва строится по курсу, а не по sim.line */
+  const db = app.slice(app.indexOf('async function startDamBreak'), app.indexOf('function stopDamBreak'));
+  assert.match(db, /function bandOnCourse\(widthsCell, uptoCell\)/, 'нет построения ленты по исходному руслу');
+  assert.match(db, /makeBandPolygon\(band\.pts, band\.w, h\.lat\)/, 'лента кадров по-прежнему берётся из sim.line');
+  assert.ok(!/makeBandPolygon\(\s*chaikinSmooth\(sim\.line/.test(app),
+    'прежнее «лента по сетке расчёта» вернулось');
+  assert.match(app, /return \{ line, ds, N, L, cum, course, frames/, 'simulateDamBreak не отдаёт геометрию русла');
+  assert.match(app, /map\.on\('zoomend', \(\) => \{ if \(S\.damBreak && S\.damBreak\.redrawBand\)/,
+    'смена масштаба не перекладывает ленту — пол видимости останется «с того» зума');
+  /* Chaikin теперь внутри makeBandPolygon: двойное сглаживание убираем */
+  assert.ok(!/chaikinSmooth\(course, 2\)/.test(app), 'makeFloodFootprint по-прежнему сглаживает заранее — лента сгладится дважды');
+});
+
+test('лента прорыва лежит на русле у ВСЕХ станций с руслом в данных', () => {
+  const w = {};
+  new Function('window', read('rivers-data.js'))(w);
+  const ids = Object.keys(w.RIVER_COURSES).filter(id => Array.isArray(w.RIVER_COURSES[id]) && w.RIVER_COURSES[id].length >= 6);
+  assert.ok(ids.length >= 5, 'русел в данных меньше пяти: ' + ids.join(','));
+  for (const id of ids){
+    const course = w.RIVER_COURSES[id];
+    const lat = course.reduce((a, p) => a + p[0], 0) / course.length;
+    const kx = 111320 * Math.cos(lat * Math.PI / 180);
+    const cM = course.map(p => [p[1] * kx, p[0] * 110574]);
+    const dist = (p) => {
+      const px = p[1] * kx, py = p[0] * 110574;
+      let best = Infinity;
+      for (let i = 1; i < cM.length; i++){
+        const [ax, ay] = cM[i-1], [bx, by] = cM[i];
+        const dx = bx-ax, dy = by-ay, l2 = dx*dx + dy*dy;
+        let t = l2 ? ((px-ax)*dx + (py-ay)*dy)/l2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        best = Math.min(best, Math.hypot(px - (ax + t*dx), py - (ay + t*dy)));
+      }
+      return best;
+    };
+    const { cum, line, N } = GEO.resampleUniform(course, 250);
+    const cellW = new Float32Array(N + 1);
+    for (let k = 0; k <= N; k++) cellW[k] = 20 + 30 * (k / N);      /* 20…50 м */
+    const band = GEO.makeBandPolygon(course, GEO.widthsAlong(cum, cellW, 250), lat);
+    let worst = 0, far = 0;
+    for (const pt of band){ const d = dist(pt); if (d > worst) worst = d; if (d > 45) far++; }
+    assert.equal(far, 0, id + ': ' + far + ' вершин ленты дальше 45 м от русла (макс ' +
+      worst.toFixed(0) + ' м) — меандры «срезаны»');
+    assert.ok(band.length >= course.length, id + ': вершин ленты меньше, чем узлов русла — лента рисуется по сетке расчёта');
+    assert.ok(isFinite(worst) && line.length === N + 1, id + ': сетка расчёта разъехалась с руслом');
+  }
+});
+
+test('карточка станции догоняет бегунок, а не остаётся «вчерашней»', () => {
+  const src = grabFn('scheduleCard');
+  assert.match(app, /if \(S\.selected && !S\.damBreak\) scheduleCard\(\);/,
+    'render() не обновляет карточку при перемотке — уровень и площадь останутся на старой дате');
+  assert.match(app, /\$\('slider'\)\.onchange = \(\) => scheduleCard\(true\);/,
+    'на отпускании бегунка карточка не догоняет дату');
+  assert.match(src, /S\.scenario === 'release'/, 'в «сбросе» карточку ведёт сценарий — пересборка её сотрёт');
+  assert.match(src, /S\.cardKey === key/, 'нет защиты от двойной пересборки карточки на каждом кадре');
+  assert.match(src, /setTimeout\(\(\) => \{ S\.cardTimer = 0; scheduleCard\(true\); \}, 260\)/,
+    'троттлинг без «хвоста» бросает карточку на середине ряда');
+  /* климатический ряд месячный: без пересборки карточки пользователь видит
+     только смену цвета — ровно та претензия, из-за которой это и делалось */
+  assert.match(src, /detailsHTML\(h\)/, 'карточка не пересобирается');
+});

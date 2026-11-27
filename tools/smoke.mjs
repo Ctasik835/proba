@@ -642,6 +642,11 @@ if (NARROW){
 {
   /* Карта при preferCanvas рисует полигоны в canvas — в DOM смотреть нечего,
      поэтому перехватываем сами L.polygon: аргументом идёт кольцо берега. */
+  /* Состояние приложения — в глобальной ЛЕКСИЧЕСКОЙ области страницы:
+     top-level const в обычном <script> не вешается на window, так что
+     window.S / window.HPPS там нет, а window.eval('S') — есть */
+  const evalApp = (src) => { try { return window.eval(src); } catch { return null; } };
+  const PEROH = evalApp('HPPS.find(h => h.id === "pero")') || {};
   const polys = [];
   const origPoly = window.L.polygon;
   window.L.polygon = function(ll, o){ polys.push({ ll, o }); return origPoly.apply(this, arguments); };
@@ -657,20 +662,61 @@ if (NARROW){
     }
     return Math.abs(A) / 2;
   };
+  /* слой зеркала станции целиком (группа или один полигон) — кольцом наружу */
+  /* листает не L.polygon-создание (при перемотке setLatLngs), поэтому кольцо
+     читаем из живого слоя: weight 2 — вода, weight 1 + dashArray — граница НПВ */
+  const liveShore = () => evalApp(`(() => {
+    const o = S.reservoirs.pero;
+    if (!o) return null;
+    const ls = (o.getLayers ? o.getLayers().slice() : [o]);
+    const flat = a => (!Array.isArray(a) || !a.length || !Array.isArray(a[0]) ? a : flat(a[0]));
+    const pick = ls.filter(l => l.getLatLngs && l.options && l.options.weight === 2)[0]
+      || ls.filter(l => l.getLatLngs && !(l.options && l.options.dashArray))[0];
+    if (!pick) return null;
+    const rr = flat(pick.getLatLngs());
+    if (!rr || !rr.length) return null;
+    return rr.map(pt => [pt.lat !== undefined ? pt.lat : pt[0], pt.lng !== undefined ? pt.lng : pt[1]]);
+  })()`);
+  const liveDashed = () => evalApp(`(() => {
+    const o = S.reservoirs.pero;
+    if (!o) return 0;
+    return (o.getLayers ? o.getLayers().slice() : [o]).filter(l => l.options && l.options.dashArray).length;
+  })()`) || 0;
+
   const snapshot = () => {
     const water = polys.filter(x => x.o.weight === 2 && x.o.fillOpacity > 0.2 && x.ll.length);
-    const dashed = polys.filter(x => x.o.dashArray && x.o.weight === 1);
-    const last = water[water.length - 1];
+    const ring = liveShore();
+    const dashed = liveDashed();
+    const last = ring ? { ll: ring } : water[water.length - 1];
 
+    const R = evalApp('S.results.pero') || {}, ix = evalApp('S.idx') || 0;
     const lvl = /Текущий уровень<\/span><span>([\d,.]+)/.exec(q('#details').innerHTML);
     return { ll: last ? last.ll : null,
-             area: last ? polyArea(last.ll) : 0, dashed: dashed.length,
+             area: last ? polyArea(last.ll) : 0, dashed,
              level: lvl ? parseFloat(lvl[1].replace(',', '.').replace(/\s/g, '')) : NaN,
-             water: water.length, txt: q('#details').textContent.replace(/\s+/g, ' ') };
+             water: water.length, txt: q('#details').textContent.replace(/\s+/g, ' '),
+             /* чем рисует берег (shoreWidth) и что говорит модель (area/areaNMU) —
+                ряды приложения: проверка «цифра ↔ геометрия» ниже опирается на них */
+             sw: R.shoreWidth ? R.shoreWidth[ix] : null,
+             mr: R.area && PEROH.areaNMU ? R.area[ix] / PEROH.areaNMU : null,
+             lvlRaw: R.level ? R.level[ix] : null };
   };
 
   click(q('.hppItem[data-id="pero"]'));
   await wait(350);
+  /* Снимаем на весеннем максимуме ряда: на межени «засухе» некуда сжиматься,
+     и проверка «разницу видно» превратилась бы в проверку предела чаши */
+  const iMax = evalApp(`(() => { const l = (S.results.pero || {}).level || []; let b = 0;
+    for (let i = 0; i < l.length; i++) if (isFinite(l[i]) && l[i] > (l[b] || -Infinity)) b = i;
+    return b; })()`) || 0;
+  {
+    const sl = q('#slider');
+    if (sl && iMax > 0){
+      sl.value = String(iMax);
+      sl.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await wait(700);
+    }
+  }
   const per = {};
   for (const sc of ['normal', 'flood', 'drought', 'normal']){
     polys.length = 0;
@@ -678,15 +724,17 @@ if (NARROW){
     await wait(500);
     per[sc] = snapshot();
     if (process.env.SMOKE_DEBUG) console.log('   dbg', sc, JSON.stringify({
-      scen: window.S.scenario, active: window.S.active,
-      water: window.S.results.pero?.scenarioWater,
-      scales: window.S.results.pero?.shoreScale?.slice(-1),
-      lv: window.S.results.pero?.level?.slice(-1),
-      factor: window.GES.scenarioFactor(window.HYDRO_LOGS.pero, new Date('2026-06-15T00:00:00Z'), sc),
-      hpp: !!window.HYDRO_LOGS.pero.hpp,
+      scen: evalApp('S.scenario'), mode: evalApp('S.mode'),
+      water: evalApp('S.results.pero && S.results.pero.scenarioWater'),
+      shoreWidth: evalApp('S.results.pero && S.results.pero.shoreWidth.slice(-1)'),
+      dh: evalApp('S.results.pero && S.results.pero.shoreDh.slice(-1)'),
+      lv: evalApp('S.results.pero && S.results.pero.level.slice(-1)'),
+      area: evalApp('S.results.pero && S.results.pero.area.slice(-1)'),
+      idx: evalApp('S.idx')
     }));
   }
-  window.L.polygon = origPoly;
+  /* перехват держим до конца блока (в т.ч. до секции климата): snapshot()
+     читает ровно этот polys, поэтому и климат снимаетmirror отсюда */
 
   /* срез строк карточки для диагнозов — объявляем до первого использования */
   const row = (o) => ['Площадь берегового контура', 'Поправка «'].map(k => {
@@ -702,19 +750,38 @@ if (NARROW){
     'площадь ×' + ratioF.toFixed(3) + ' (' + (per.normal.area / 1e4).toFixed(2) + ' → ' + (per.flood.area / 1e4).toFixed(2) + ' га)');
   check('«Засуха»: вода отступила внутрь контура НПВ', ratioD < 0.85,
     'площадь ×' + ratioD.toFixed(3) + ' (' + (per.normal.area / 1e4).toFixed(2) + ' → ' + (per.drought.area / 1e4).toFixed(2) + ' га)');
-  check('при отступлении воды рисуется пунктирная граница НПВ',
-    per.drought.dashed > 0 && per.flood.dashed > 0 && per.normal.dashed === 0,
-    'пунктиров: ' + JSON.stringify({ n: per.normal.dashed, f: per.flood.dashed, d: per.drought.dashed }));
+  /* Граница НПВ — про «вода отступила ВНУТРЬ снимка», поэтому она обязана
+     появляться и в «норме», если ряд модели ниже НПВ (режим климата, межень) */
+  const below = (o) => o.level < (PEROH.nmu - 0.1);
+  check('при отступлении воды рисуется пунктирная граница НПВ (и в «норме» на межени)',
+    per.drought.dashed > 0 && per.flood.dashed > 0 &&
+    per.normal.dashed === (below(per.normal) ? 1 : 0),
+    'пунктиров: ' + JSON.stringify({ n: per.normal.dashed, f: per.flood.dashed, d: per.drought.dashed }) +
+    ' · норма ' + per.normal.level + ' м при НПУ ' + PEROH.nmu + ' м');
   check('отметка уровня в карточке реагирует на сценарий',
     per.flood.level >= per.normal.level && per.drought.level < per.normal.level,
     'засуха ' + per.drought.level + ' · норма ' + per.normal.level + ' · паводок ' + per.flood.level);
   const pct = (o) => { const m = /% снимка при НПВ/.test(o.txt)
       ? +(o.txt.replace(',', '.').match(/(\d+)\s*% снимка при НПВ/) || [0, 0])[1] : 100;
     return m; };
-  check('площадь контура в карточке = площадь нарисованной фигуры',
-    pct(per.flood) > 100 && pct(per.drought) > 40 && pct(per.drought) < 90 &&
-    per.normal.txt.indexOf('км² · снимок при НПВ') > 0,
-    'норма/паводок/засуха: ' + pct(per.normal) + '% / ' + pct(per.flood) + '% / ' + pct(per.drought) + '%');
+  /* «не только цвет, но и размер»: цифра модели, множитель берега и НАРИСОВАННАЯ
+     доля снимка при НПВ — три имени одной величины. Кривые area() и геометрия
+     нарочно замкнуты, иначе карточка и контур расходятся (на этом и попадалось) */
+  {
+    const A0 = polyArea(window.RESERVOIR_GEOMETRY.pero.n[0]);
+    const clamp = v => Math.min(1.5, Math.max(0.3, v));
+    const rows = ['normal', 'flood', 'drought'].map(k => {
+      const o = per[k], drawn = A0 ? o.area / A0 : 0, ref = pct(o) / 100;
+      return { k, drawn, pct: ref, sw: o.sw, mr: o.mr,
+               ok: o.area > 0 && Math.abs(drawn - ref) < 0.12 &&
+                   typeof o.sw === 'number' && o.sw >= 0.2 - 1e-9 && o.sw <= 1.5 + 1e-9 };
+    });
+    check('площадь берегового контура в карточке = нарисованная доля снимка при НПВ',
+      rows.every(r => r.ok),
+      rows.map(r => r.k + ': рисунок ' + (r.drawn * 100).toFixed(0) + '% · карточка ' +
+        (r.pct * 100).toFixed(0) + '% · shoreWidth ' + (r.sw == null ? '—' : r.sw.toFixed(2)) +
+        ' (доля площади модели ' + (r.mr == null ? '—' : (clamp(r.mr) * 100).toFixed(0) + '%)')).join(' || '));
+  }
 
   /* ── ГЕОМЕТРИЯ: «не съезжает» ── вода при сработке держится створа и не
      вылезает за чашу. Метры — локальные (долгота сжата cos широты). */
@@ -789,6 +856,133 @@ if (NARROW){
     /Поправка «многоводный год»/.test(per.flood.txt) && !/Поправка «/.test(per.normal.txt),
     'засуха: ' + row(per.drought) + ' || паводок: ' + row(per.flood));
   check('зеркало менялось без ошибок страницы', errors.length === 0, errors.slice(0, 1).join(''));
+  /* ── режим КЛИМАТ: зеркало обязано менять РАЗМЕР, а не только цвет ── */
+  {
+    click(q('#modeTabs button[data-mode=\"climate\"]'));
+    await wait(2600);
+    const seen = [];
+    for (const frac of [0.30, 0.42, 0.55, 0.68, 0.80, 0.93]){
+      const sl = q('#slider');
+      sl.value = String(Math.round(+sl.max * frac));
+      sl.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await wait(200);
+      await wait(320);
+      const o = snapshot();
+      seen.push({ frac, area: o.area, dashed: o.dashed, txt: o.txt, level: o.level,
+                  sw: o.sw, mr: o.mr, lvlRaw: o.lvlRaw, idx: evalApp('S.idx') });
+      if (process.env.SMOKE_DEBUG) console.log('   dbg clima', frac, JSON.stringify(seen[seen.length-1]));
+      if (process.env.SMOKE_DEBUG) console.log('   dbg S', JSON.stringify({
+        scen: evalApp('S.scenario'), mode: evalApp('S.mode'), water: evalApp('S.results.pero && S.results.pero.scenarioWater'),
+        lv: evalApp('S.results.pero && S.results.pero.level.slice(-1)'),
+        sw: evalApp('S.results.pero && S.results.pero.shoreWidth.slice(-1)') }));
+    }
+    window.L.polygon = origPoly;
+    const areas = seen.map(x => x.area).filter(x => x > 0);
+    const amax = Math.max(...areas), amin = Math.min(...areas);
+    check('в режиме климата зеркало меняет РАЗМЕР по ряду (не только цвет)',
+      amin > 0 && amax / amin > 1.08, 'площадь га: ' + areas.map(x => (x / 1e4).toFixed(2)).join(' · ') +
+      ' · размах ×' + (amax / (amin || 1)).toFixed(2));
+    check('бегунок климата двигает ряд (индекс не стоит на месте)',
+      new Set(seen.map(x => x.idx)).size >= 4, 'idx: ' + seen.map(x => x.idx).join(','));
+    /* берег в «норме» = monotone(f) от отметки ряда: выше вода — шире зеркало */
+    const byLvl = seen.slice().sort((a, b) => (a.lvlRaw ?? 0) - (b.lvlRaw ?? 0));
+    check('множитель берега монотонен по отметке ряда (выше вода — шире зеркало)',
+      byLvl.every((x, i) => i === 0 || x.sw == null || x.sw >= byLvl[i-1].sw - 1e-9),
+      'отметка→shoreWidth: ' + byLvl.map(x => (x.lvlRaw ?? NaN).toFixed(2) + '→' + (x.sw ?? NaN).toFixed(2)).join(' · '));
+    check('карточка догоняет бегунок: уровень в ней = уровень ряда на эту дату',
+      seen.every(x => !isFinite(x.lvlRaw) || Math.abs(x.level - x.lvlRaw) < 0.35),
+      seen.map(x => 'карточка ' + x.level + ' м · ряд ' + (x.lvlRaw ?? NaN).toFixed(2) + ' м').join(' · '));
+    check('в «норме» зеркало держится в чаше (0,2…1,5 доли снимка при НПВ)',
+      seen.every(x => x.sw == null || (x.sw >= 0.2 - 1e-9 && x.sw <= 1.5 + 1e-9)),
+      'shoreWidth: ' + seen.map(x => (x.sw ?? NaN).toFixed(2)).join(' · '));
+    const low = seen.slice().sort((x, y) => x.area - y.area)[0];
+    check('на низкой межени климата рисуется граница НПВ и объяснение в карточке',
+      low.dashed > 0 && /Отметка ниже НПУ/.test(low.txt) && /% снимка при НПВ/.test(low.txt),
+      'пунктиров: ' + low.dashed + ' · ' + (low.txt.match(/Отметка ниже НПУ[^·]{0,46}/) || ['—'])[0].trim());
+    check('в климате уровень карточки и размер зеркала не противоречат друг другу',
+      /* ряд отметок берём из S (карточка перерисовывается с дебаунсом),
+         размер — с нарисованного кольца: низкая вода не обязана стоять полным прудом */
+      seen.every(x => {
+        const rel = x.area / (amax || 1), lvl = x.lvlRaw;
+        if (!isFinite(lvl)) return true;
+        return !((lvl < PEROH.nmu - 0.1) && rel > 0.995) && !((lvl > PEROH.nmu - 0.05) && rel < 0.9);
+      }),
+      seen.map(x => x.level + 'м→×' + (x.area / (amax || 1)).toFixed(2) +
+        (x.sw != null ? ' (shoreWidth ' + x.sw.toFixed(2) + ')' : '')).join(' · '));
+    check('климатическое зеркало менялось без ошибок', errors.length === 0, errors.slice(0, 1).join(''));
+    click(q('#modeTabs button[data-mode=\"history\"]'));
+    await wait(1800);
+  }
+}
+
+
+/* ---------- лента прорыва на Роккаланмяки: по руслу, а не по полям ---------- */
+{
+  const polys2 = [];
+  const orig2 = window.L.polygon;
+  window.L.polygon = function(ll, o){ polys2.push({ ll, o }); return orig2.apply(this, arguments); };
+  click(q('.hppItem[data-id=\"rokk\"]'));
+  await wait(900);
+  click(q('.scenBtn[data-scen=\"dam_break\"]'));
+  /* зона затопления растёт вместе с фронтом: снимать «меандры» надо в конце
+     прогона, иначе в ленте всего пара сотен метров и они почти прямые */
+  await wait(11000);
+  window.L.polygon = orig2;
+  const rings = polys2.filter(x => Array.isArray(x.ll) && x.ll.length > 30 &&
+    x.ll.every(pt => pt && isFinite(pt[0]) && isFinite(pt[1])));
+  /* финальная зона затопления (пунктир #ff9400) — она перерисовывается на весь
+     затопленный участок; полигон последнего кадра волны короткая, по ней про
+     меандры судить нельзя */
+  const foot = rings.filter(x => x.o.color === '#ff9400' && x.o.dashArray).pop();
+  const band = foot || rings[rings.length - 1];
+  const course = window.RIVER_COURSES.rokk;
+  const lat = 60.2913, kx = 111320 * Math.cos(lat * Math.PI / 180);
+  const toM = pt => [pt[1] * kx, pt[0] * 110574];
+  const cM = course.map(toM);
+  const distCourse = (p) => {
+    let best = Infinity;
+    for (let i = 1; i < cM.length; i++){
+      const [ax, ay] = cM[i-1], [bx, by] = cM[i];
+      const dx = bx-ax, dy = by-ay, l2 = dx*dx + dy*dy;
+      let t = l2 ? ((p[0]-ax)*dx + (p[1]-ay)*dy)/l2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      best = Math.min(best, Math.hypot(p[0]-(ax+t*dx), p[1]-(ay+t*dy)));
+    }
+    return best;
+  };
+  let far = 0, worst = 0, width = 0;
+  if (band){
+    const xy = band.ll.map(toM);
+    for (const p of xy){ const d = distCourse(p); if (d > 45){ far++; worst = Math.max(worst, d); } }
+    /* «ширина» ленты — размах вершин поперёк русла, по трём точкам ряда */
+    width = Math.max(...xy.map(p => distCourse(p)));
+  }
+  check('лента прорыва на Роккаланмяки лежит НА русле (не срезает меандры)',
+    !!band && far === 0, band ? ('вершин дальше 45 м от воды: ' + far + ' из ' + band.ll.length +
+    ' · максимальный вылет ' + worst.toFixed(0) + ' м') : 'лента не найдена');
+  check('поперёк русла лента не толще самой реки более чем на 25 м',
+    !!band && width <= 25, 'макс. отстояние вершины от оси: ' + (width || 0).toFixed(1) + ' м');
+  /* лента обязана ИДТИ по излучинам, а не перерезать их хордой (претензия по
+     скриншоту: оранжевый прямоугольник через поля). Меряем отношением длины
+     средней линии ленты к расстоянию между её концами: у русла здесь ×1.17-1.28 */
+  {
+    const xy = band ? band.ll.map(toM) : [];
+    const half = Math.floor(xy.length / 2);
+    const chain = [...xy.slice(0, half), ...xy.slice(xy.length - 1, half - 1, -1)];
+    let arc = 0;
+    for (let i = 1; i < chain.length; i++) arc += Math.hypot(chain[i][0]-chain[i-1][0], chain[i][1]-chain[i-1][1]);
+    const chord = xy.length > 2 ? Math.hypot(xy[0][0]-xy[half][0], xy[0][1]-xy[half][1]) : 1;
+    check('лента следует меандрам, а не перерезает их хордой',
+      !!band && chord > 0 && arc / chord > 1.02,
+      band ? (foot ? 'зона затопления' : 'кадр волны') + ' · путь по ленте ' + Math.round(arc) +
+              ' м против хорды ' + Math.round(chord) + ' м · ×' + (arc / (chord || 1)).toFixed(3) +
+              ' · вершин ' + band.ll.length : 'лента не найдена');
+  }
+  click(q('.scenBtn[data-scen=\"reset\"]'));
+  await wait(400);
+  click(q('.hppItem[data-id=\"pero\"]'));
+  await wait(700);
+  check('лента прорыва без ошибок страницы', errors.length === 0, errors.slice(0, 1).join(''));
 }
 
 /* ---------- смена режима ---------- */
